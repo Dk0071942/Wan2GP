@@ -33,4 +33,4 @@ ENV GRADIO_SERVER_NAME="0.0.0.0"
 EXPOSE 7860
 
 # Default command: start text-to-video
-CMD ["conda", "run", "-n", "wan2gp", "python", "wgp.py"]
+CMD ["conda", "run", "-n", "wan2gp", "python", "wgp.py", "--listen"]

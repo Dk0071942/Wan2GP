@@ -6069,7 +6069,6 @@ def generate_configuration_tab(state, blocks, header, model_choice, prompt_enhan
     gr.Markdown("Please click Apply Changes at the bottom so that the changes are effective. Some choices below may be locked if the app has been launched by specifying a config preset.")
     with gr.Column():
         with gr.Tabs():
-            # with gr.Row(visible=advanced_ui) as advanced_row:
             with gr.Tab("General"):
                 dropdown_choices = [ ( get_model_name(type),  type) for type in model_types]
                 transformer_types_choices = gr.Dropdown(
@@ -6245,7 +6244,6 @@ def generate_configuration_tab(state, blocks, header, model_choice, prompt_enhan
 
                 boost_choice = gr.Dropdown(
                     choices=[
-                        # ("Auto (ON if Video longer than 5s)", 0),
                         ("ON", 1), 
                         ("OFF", 2), 
                     ],
@@ -6337,6 +6335,7 @@ def generate_about_tab():
     gr.Markdown("- <B>DwPose</B>: Open Pose extractor (https://github.com/IDEA-Research/DWPose)")
     gr.Markdown("- <B>Midas</B>: Depth extractor (https://github.com/isl-org/MiDaS")
     gr.Markdown("- <B>Matanyone</B> and <B>SAM2</B>: Mask Generation (https://github.com/pq-yang/MatAnyone) and (https://github.com/facebookresearch/sam2)")
+
 
 
 def generate_info_tab():
@@ -6858,7 +6857,7 @@ if __name__ == "__main__":
     if args.listen:
         server_name = "0.0.0.0"
     if len(server_name) == 0:
-        server_name = os.getenv("SERVER_NAME", "localhost")      
+        server_name = os.getenv("SERVER_NAME", "127.0.0.1")      
     demo = create_ui()
     if args.open_browser:
         import webbrowser 
