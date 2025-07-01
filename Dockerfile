@@ -23,7 +23,7 @@ RUN conda create -n wan2gp python=3.10.9 -y
 
 # Activate environment and install dependencies
 SHELL ["conda", "run", "-n", "wan2gp", "/bin/bash", "-c"]
-RUN pip install torch==2.7.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/test/cu124
+RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 RUN pip install -r requirements.txt
 
 # Expose default web interface port (Gradio or Streamlit)
