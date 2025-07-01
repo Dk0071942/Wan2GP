@@ -1,5 +1,5 @@
 # Use NVIDIA CUDA base image with cuDNN and Python support
-FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
 # Set the working directory in the container
 WORKDIR /app
@@ -23,8 +23,11 @@ RUN conda create -n wan2gp python=3.10.9 -y
 
 # Activate environment and install dependencies
 SHELL ["conda", "run", "-n", "wan2gp", "/bin/bash", "-c"]
-RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 RUN pip install -r requirements.txt
+
+# Set Gradio server name to bind to all interfaces
+ENV GRADIO_SERVER_NAME="0.0.0.0"
 
 # Expose default web interface port (Gradio or Streamlit)
 EXPOSE 7860
