@@ -19,6 +19,7 @@ from wan.utils.utils import calculate_new_dimensions
 from .utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
                                get_sampling_sigmas, retrieve_timesteps)
 from .utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
+from wan.utils.utils import update_loras_slists
 
 class DTT2V:
 
@@ -30,6 +31,7 @@ class DTT2V:
         rank=0,
         model_filename = None,
         model_type = None,
+        model_def = None,
         base_model_type = None,
         save_quantized = False,
         text_encoder_filename = None,
@@ -44,7 +46,7 @@ class DTT2V:
         self.dtype = dtype
         self.num_train_timesteps = config.num_train_timesteps
         self.param_dtype = config.param_dtype
-
+        self.text_len = config.text_len 
         self.text_encoder = T5EncoderModel(
             text_len=config.text_len,
             dtype=config.t5_dtype,
@@ -52,6 +54,8 @@ class DTT2V:
             checkpoint_path=text_encoder_filename,
             tokenizer_path=os.path.join(checkpoint_dir, config.t5_tokenizer),
             shard_fn= None)
+        self.model_def = model_def
+        self.image_outputs = model_def.get("image_outputs", False)
 
         self.vae_stride = config.vae_stride
         self.patch_size = config.patch_size 
@@ -201,6 +205,7 @@ class DTT2V:
         width: int = 832,
         fit_into_canvas = True,
         frame_num: int = 97,
+        batch_size = 1,
         sampling_steps: int = 50,
         shift: float = 1.0,
         guide_scale: float = 5.0,
@@ -216,14 +221,16 @@ class DTT2V:
         slg_start = 0.0,
         slg_end = 1.0,
         callback = None,
+        loras_slists = None,
         **bbargs
     ):
         self._interrupt = False
         generator = torch.Generator(device=self.device)
         generator.manual_seed(seed)
         self._guidance_scale = guide_scale
-        frame_num = max(17, frame_num) # must match causal_block_size for value of 5
-        frame_num = int( round( (frame_num - 17) / 20)* 20 + 17 )
+        if frame_num > 1:
+            frame_num = max(17, frame_num) # must match causal_block_size for value of 5
+            frame_num = int( round( (frame_num - 17) / 20)* 20 + 17 )
 
         if ar_step == 0: 
             causal_block_size = 1
@@ -242,17 +249,21 @@ class DTT2V:
             image_start = np.array(image_start.resize((width, height))).transpose(2, 0, 1)
 
 
-        latent_length = (frame_num - 1) // 4 + 1
+        latent_length = (frame_num - 1) // 4 + 1 
         latent_height = height // 8
         latent_width = width // 8
 
         if self._interrupt:
             return None
+        text_len = self.text_len
         prompt_embeds = self.text_encoder([input_prompt], self.device)[0]
         prompt_embeds  = prompt_embeds.to(self.dtype).to(self.device)
+        prompt_embeds = torch.cat([prompt_embeds, prompt_embeds.new_zeros(text_len -prompt_embeds.size(0), prompt_embeds.size(1)) ]).unsqueeze(0) 
+
         if self.do_classifier_free_guidance:
             negative_prompt_embeds = self.text_encoder([n_prompt], self.device)[0]
             negative_prompt_embeds  = negative_prompt_embeds.to(self.dtype).to(self.device)
+            negative_prompt_embeds = torch.cat([negative_prompt_embeds, negative_prompt_embeds.new_zeros(text_len -negative_prompt_embeds.size(0), negative_prompt_embeds.size(1)) ]).unsqueeze(0) 
 
         if self._interrupt:
             return None
@@ -291,12 +302,12 @@ class DTT2V:
                     prefix_video = prefix_video[:, : predix_video_latent_length]
 
         base_num_frames_iter = latent_length
-        latent_shape = [16, base_num_frames_iter, latent_height, latent_width]
+        latent_shape = [batch_size, 16, base_num_frames_iter, latent_height, latent_width]
         latents = self.prepare_latents(
             latent_shape, dtype=torch.float32, device=self.device, generator=generator
         )
         if prefix_video is not None:
-            latents[:, :predix_video_latent_length] = prefix_video.to(torch.float32)
+            latents[:, :, :predix_video_latent_length] = prefix_video.to(torch.float32)
         step_matrix, _, step_update_mask, valid_interval = self.generate_timestep_matrix(
             base_num_frames_iter,
             init_timesteps,
@@ -316,8 +327,9 @@ class DTT2V:
 
         updated_num_steps=  len(step_matrix)
         if callback != None:
+            update_loras_slists(self.model, loras_slists, updated_num_steps)
             callback(-1, None, True, override_num_inference_steps = updated_num_steps)
-        if self.model.enable_cache:
+        if self.model.enable_cache == "tea":
             x_count = 2 if self.do_classifier_free_guidance else 1
             self.model.previous_residual = [None] * x_count 
             time_steps_comb = []
@@ -328,10 +340,12 @@ class DTT2V:
                 if overlap_noise > 0 and valid_interval_start < predix_video_latent_length:
                     timestep[:, valid_interval_start:predix_video_latent_length] = overlap_noise
                 time_steps_comb.append(timestep)
-            self.model.compute_teacache_threshold(self.model.cache_start_step, time_steps_comb, self.model.teacache_multiplier)
+            self.model.compute_teacache_threshold(self.model.cache_start_step, time_steps_comb, self.model.cache_multiplier)
             del time_steps_comb
+        else:
+            self.model.enable_cache = None
         from mmgp import offload
-        freqs = get_rotary_pos_embed(latents.shape[1 :], enable_RIFLEx= False) 
+        freqs = get_rotary_pos_embed(latents.shape[2 :], enable_RIFLEx= False) 
         kwrags = {
             "freqs" :freqs,
             "fps" : fps_embeds,
@@ -349,15 +363,15 @@ class DTT2V:
             update_mask_i = step_update_mask[i]
             valid_interval_start, valid_interval_end = valid_interval[i]
             timestep = timestep_i[None, valid_interval_start:valid_interval_end].clone()
-            latent_model_input = latents[:, valid_interval_start:valid_interval_end, :, :].clone()
+            latent_model_input = latents[:, :, valid_interval_start:valid_interval_end, :, :].clone()
             if overlap_noise > 0 and valid_interval_start < predix_video_latent_length:
                 noise_factor = 0.001 * overlap_noise
                 timestep_for_noised_condition = overlap_noise
-                latent_model_input[:, valid_interval_start:predix_video_latent_length] = (
-                    latent_model_input[:, valid_interval_start:predix_video_latent_length]
+                latent_model_input[:, :, valid_interval_start:predix_video_latent_length] = (
+                    latent_model_input[:, :, valid_interval_start:predix_video_latent_length]
                     * (1.0 - noise_factor)
                     + torch.randn_like(
-                        latent_model_input[:, valid_interval_start:predix_video_latent_length]
+                        latent_model_input[:, :, valid_interval_start:predix_video_latent_length]
                     )
                     * noise_factor
                 )
@@ -408,18 +422,27 @@ class DTT2V:
                     del noise_pred_cond, noise_pred_uncond
             for idx in range(valid_interval_start, valid_interval_end):
                 if update_mask_i[idx].item():
-                    latents[:, idx] = sample_schedulers[idx].step(
-                        noise_pred[:, idx - valid_interval_start],
+                    latents[:, :, idx] = sample_schedulers[idx].step(
+                        noise_pred[:, :, idx - valid_interval_start],
                         timestep_i[idx],
-                        latents[:, idx],
+                        latents[:, :, idx],
                         return_dict=False,
                         generator=generator,
                     )[0]
                     sample_schedulers_counter[idx] += 1
             if callback is not None:
-                callback(i, latents.squeeze(0), False)         
+                latents_preview = latents
+                if len(latents_preview) > 1: latents_preview = latents_preview.transpose(0,2)
+                callback(i, latents_preview[0], False)
+                latents_preview = None
 
-        x0 = latents.unsqueeze(0)
-        videos = [self.vae.decode(x0, tile_size= VAE_tile_size)[0]]
-        output_video = videos[0].clamp(-1, 1).cpu()  # c, f, h, w
-        return output_video
+        x0 =latents.unbind(dim=0)
+
+        videos = self.vae.decode(x0, VAE_tile_size)
+
+        if self.image_outputs:
+            videos = torch.cat(videos, dim=1) if len(videos) > 1 else videos[0]
+        else:
+            videos = videos[0] # return only first video     
+
+        return videos

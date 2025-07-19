@@ -6,18 +6,19 @@ Loras (Low-Rank Adaptations) allow you to customize video generation models by a
 
 Loras are organized in different folders based on the model they're designed for:
 
-### Text-to-Video Models
+### Wan Text-to-Video Models
 - `loras/` - General t2v loras
 - `loras/1.3B/` - Loras specifically for 1.3B models
 - `loras/14B/` - Loras specifically for 14B models
 
-### Image-to-Video Models
+### Wan Image-to-Video Models
 - `loras_i2v/` - Image-to-video loras
 
 ### Other Models
 - `loras_hunyuan/` - Hunyuan Video t2v loras
 - `loras_hunyuan_i2v/` - Hunyuan Video i2v loras
 - `loras_ltxv/` - LTX Video loras
+- `loras_flux/` - Flux loras
 
 ## Custom Lora Directory
 
@@ -64,7 +65,7 @@ For dynamic effects over generation steps, use comma-separated values:
 
 ## Lora Presets
 
-Presets are combinations of loras with predefined multipliers and prompts.
+Lora Presets are combinations of loras with predefined multipliers and prompts.
 
 ### Creating Presets
 1. Configure your loras and multipliers
@@ -95,17 +96,37 @@ WanGP supports multiple lora formats:
 - **Replicate** format
 - **Standard PyTorch** (.pt, .pth)
 
-## Safe-Forcing lightx2v Lora (Video Generation Accelerator)
 
-Safeforcing Lora has been created by Kijai from the Safe-Forcing lightx2v distilled Wan model and can generate videos with only 2 steps and offers also a 2x speed improvement since it doesnt require classifier free guidance. It works on both t2v and i2v models
+## Loras Accelerators
+Most Loras are used to apply a specific style or to alter the content of the output of the generated video.
+However some Loras have been designed to tranform a model into a distilled model which requires fewer steps to generate a video.
+
+You will find most *Loras Accelerators* here:
+https://huggingface.co/DeepBeepMeep/Wan2.1/tree/main/loras_accelerators
 
 ### Setup Instructions
-1. Download the Lora:
-   ```
-   https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors
-   ```
-2. Place in your `loras/` directory
+1. Download the Lora
+2. Place it in your `loras/` directory if it is a t2v lora or in the `loras_i2v/` directory if it isa i2v lora
 
+## FusioniX (or FusionX) Lora 
+If you need just one Lora accelerator use this one. It is a combination of multiple Loras acelerators (including Causvid below) and style loras. It will not only accelerate the video generation but it will also improve the quality. There are two versions of this lora whether you use it for t2v or i2v
+
+### Usage
+1. Select a Wan t2v model (e.g., Wan 2.1 text2video 13B or Vace 13B)
+2. Enable Advanced Mode
+3. In Advanced Generation Tab:
+   - Set Guidance Scale = 1
+   - Set Shift Scale = 2
+4. In Advanced Lora Tab:
+   - Select CausVid Lora
+   - Set multiplier to 1
+5. Set generation steps from 8-10
+6. Generate!
+
+## Safe-Forcing lightx2v Lora (Video Generation Accelerator)
+Safeforcing Lora has been created by Kijai from the Safe-Forcing lightx2v distilled Wan model and can generate videos with only 2 steps and offers also a 2x speed improvement since it doesnt require classifier free guidance. It works on both t2v and i2v models
+You will find it under the name of *Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors*
+ 
 ### Usage
 1. Select a Wan t2v or i2v model (e.g., Wan 2.1 text2video 13B or Vace 13B)
 2. Enable Advanced Mode
@@ -118,16 +139,9 @@ Safeforcing Lora has been created by Kijai from the Safe-Forcing lightx2v distil
 5. Set generation steps to 2-8
 6. Generate!
 
+
 ## CausVid Lora (Video Generation Accelerator)
-
 CausVid is a distilled Wan model that generates videos in 4-12 steps with 2x speed improvement.
-
-### Setup Instructions
-1. Download the CausVid Lora:
-   ```
-   https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan21_CausVid_14B_T2V_lora_rank32.safetensors
-   ```
-2. Place in your `loras/` directory
 
 ### Usage
 1. Select a Wan t2v model (e.g., Wan 2.1 text2video 13B or Vace 13B)
@@ -149,25 +163,10 @@ CausVid is a distilled Wan model that generates videos in 4-12 steps with 2x spe
 *Note: Lower steps = lower quality (especially motion)*
 
 
-
 ## AccVid Lora (Video Generation Accelerator)
 
 AccVid is a distilled Wan model that generates videos with a 2x speed improvement since classifier free guidance is no longer needed (that is cfg = 1).
 
-### Setup Instructions
-1. Download the AccVid Lora:
-
-- for t2v models:
-   ```
-   https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan21_AccVid_T2V_14B_lora_rank32_fp16.safetensors
-   ```
-
-- for i2v models:
-   ```
-   https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan21_AccVid_I2V_480P_14B_lora_rank32_fp16.safetensors
-   ```
-
-2. Place in your `loras/` directory or `loras_i2v/` directory
 
 ### Usage
 1. Select a Wan t2v model (e.g., Wan 2.1 text2video 13B or Vace 13B) or Wan i2v model
@@ -206,17 +205,38 @@ https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan21_T2V_14B_lightx2v_cfg
 
 ## Macro System (Advanced)
 
-Create multiple prompts from templates using macros:
+Create multiple prompts from templates using macros. This allows you to generate variations of a sentence by defining lists of values for different variables.
+
+**Syntax Rule:**
+
+Define your variables on a single line starting with `!`. Each complete variable definition, including its name and values, **must be separated by a colon (`:`)**.
+
+**Format:**
 
 ```
-! {Subject}="cat","woman","man", {Location}="forest","lake","city", {Possessive}="its","her","his"
+! {Variable1}="valueA","valueB" : {Variable2}="valueC","valueD"
+This is a template using {Variable1} and {Variable2}.
+```
+
+**Example:**
+
+The following macro will generate three distinct prompts by cycling through the values for each variable.
+
+**Macro Definition:**
+
+```
+! {Subject}="cat","woman","man" : {Location}="forest","lake","city" : {Possessive}="its","her","his"
 In the video, a {Subject} is presented. The {Subject} is in a {Location} and looks at {Possessive} watch.
 ```
 
-This generates:
-1. "In the video, a cat is presented. The cat is in a forest and looks at its watch."
-2. "In the video, a woman is presented. The woman is in a lake and looks at her watch."
-3. "In the video, a man is presented. The man is in a city and looks at his watch."
+**Generated Output:**
+
+```
+In the video, a cat is presented. The cat is in a forest and looks at its watch.
+In the video, a woman is presented. The woman is in a lake and looks at her watch.
+In the video, a man is presented. The man is in a city and looks at his watch.
+```
+
 
 ## Troubleshooting
 
@@ -247,6 +267,7 @@ This generates:
 --lora-dir-hunyuan path           # Path to Hunyuan t2v loras
 --lora-dir-hunyuan-i2v path       # Path to Hunyuan i2v loras
 --lora-dir-ltxv path              # Path to LTX Video loras
+--lora-dir-flux path              # Path to Flux loras
 --lora-preset preset              # Load preset on startup
 --check-loras                     # Filter incompatible loras
 ``` 
