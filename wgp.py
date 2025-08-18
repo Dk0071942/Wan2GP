@@ -3,7 +3,11 @@ import time
 import sys
 import threading
 import argparse
-from mmgp import offload, safetensors2, profile_type 
+from dotenv import load_dotenv
+from mmgp import offload, safetensors2, profile_type
+
+# Load environment variables from .env file
+load_dotenv() 
 try:
     import triton
 except ImportError:

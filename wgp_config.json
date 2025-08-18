@@ -1,1 +1,24 @@
-{"attention_mode": "auto", "transformer_types": [], "transformer_quantization": "int8", "text_encoder_quantization": "int8", "save_path": "outputs", "compile": "", "metadata_type": "metadata", "default_ui": "t2v", "boost": 1, "clear_file_list": 5, "vae_config": 0, "profile": 4, "preload_model_policy": [], "UI_theme": "default"}
+{
+    "attention_mode": "auto",
+    "transformer_types": [],
+    "transformer_quantization": "int8",
+    "text_encoder_quantization": "int8",
+    "save_path": "outputs",
+    "compile": "",
+    "metadata_type": "metadata",
+    "default_ui": "t2v",
+    "boost": 1,
+    "clear_file_list": 5,
+    "vae_config": 0,
+    "profile": 4,
+    "preload_model_policy": [],
+    "UI_theme": "default",
+    "last_model_per_family": {
+        "hunyuan": "hunyuan_avatar"
+    },
+    "last_model_type": "hunyuan_avatar",
+    "last_resolution_choice": "720x720",
+    "last_resolution_per_group": {
+        "480p": "720x720"
+    }
+}
