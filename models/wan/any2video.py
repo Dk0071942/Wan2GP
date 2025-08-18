@@ -87,17 +87,17 @@ class WanAny2V:
             dtype=config.t5_dtype,
             device=torch.device('cpu'),
             checkpoint_path=text_encoder_filename,
-            tokenizer_path=os.path.join(checkpoint_dir, config.t5_tokenizer),
+            tokenizer_path=os.path.join(checkpoint_dir, "umt5-xxl"),
             shard_fn= None)
 
         # base_model_type = "i2v2_2"
-        if hasattr(config, "clip_checkpoint") and not base_model_type in ["i2v_2_2"]:
+        if hasattr(config, "clip_checkpoint") and not base_model_type in ["i2v_2_2", "i2v_2_2_multitalk"]:
             self.clip = CLIPModel(
                 dtype=config.clip_dtype,
                 device=self.device,
                 checkpoint_path=os.path.join(checkpoint_dir , 
                                             config.clip_checkpoint),
-                tokenizer_path=os.path.join(checkpoint_dir ,  config.clip_tokenizer))
+                tokenizer_path=os.path.join(checkpoint_dir , "xlm-roberta-large"))
 
 
         if base_model_type in ["ti2v_2_2"]:
@@ -112,7 +112,8 @@ class WanAny2V:
         
         self.vae = vae(
             vae_pth=os.path.join(checkpoint_dir, vae_checkpoint), dtype= VAE_dtype,
-            device=self.device)
+            device="cpu")
+        self.vae.device = self.device
         
         # config_filename= "configs/t2v_1.3B.json"
         # import json
@@ -459,6 +460,7 @@ class WanAny2V:
                 sigmas=sampling_sigmas)
         else:
             raise NotImplementedError(f"Unsupported Scheduler {sample_solver}")
+        original_timesteps = timesteps
 
         seed_g = torch.Generator(device=self.device)
         seed_g.manual_seed(seed)
@@ -467,7 +469,6 @@ class WanAny2V:
         color_reference_frame = None
         if self._interrupt:
             return None
-        
         # Text Encoder
         if n_prompt == "":
             n_prompt = self.sample_neg_prompt
@@ -494,17 +495,17 @@ class WanAny2V:
         vace = model_type in ["vace_1.3B","vace_14B", "vace_multitalk_14B"]
         phantom = model_type in ["phantom_1.3B", "phantom_14B"]
         fantasy = model_type in ["fantasy"]
-        multitalk = model_type in ["multitalk", "vace_multitalk_14B"]
+        multitalk = model_type in ["multitalk", "vace_multitalk_14B", "i2v_2_2_multitalk"]
         recam = model_type in ["recam_1.3B"]
         ti2v = model_type in ["ti2v_2_2"]
-
+        start_step_no = 0
         ref_images_count = 0
         trim_frames = 0
         extended_overlapped_latents = None
         timestep_injection = False
         lat_frames = int((frame_num - 1) // self.vae_stride[0]) + 1
         # image2video 
-        if model_type in ["i2v", "i2v_2_2", "fun_inp_1.3B", "fun_inp", "fantasy", "multitalk", "flf2v_720p"]:
+        if model_type in ["i2v", "i2v_2_2", "fun_inp_1.3B", "fun_inp", "fantasy", "multitalk", "i2v_2_2_multitalk", "flf2v_720p"]:
             any_end_frame = False
             if image_start is None:
                 _ , preframes_count, height, width = input_video.shape
@@ -602,10 +603,9 @@ class WanAny2V:
         if recam:
             # should be be in fact in input_frames since it is control video not a video to be extended
             target_camera = model_mode
-            width = input_video.shape[2]
-            height = input_video.shape[1]
+            height,width = input_video.shape[-2:]
             input_video = input_video.to(dtype=self.dtype , device=self.device)
-            source_latents = self.vae.encode([input_video])[0] #.to(dtype=self.dtype, device=self.device)
+            source_latents = self.vae.encode([input_video])[0].unsqueeze(0) #.to(dtype=self.dtype, device=self.device)
             del input_video
             # Process target camera (recammaster)
             from shared.utils.cammmaster_tools import get_camera_embedding
@@ -616,7 +616,7 @@ class WanAny2V:
         # Video 2 Video
         if denoising_strength < 1. and input_frames != None:
             height, width = input_frames.shape[-2:]
-            source_latents = self.vae.encode([input_frames])[0]
+            source_latents = self.vae.encode([input_frames])[0].unsqueeze(0)
             injection_denoising_step = 0
             inject_from_start = False
             if input_frames != None and denoising_strength < 1 :
@@ -629,7 +629,7 @@ class WanAny2V:
                 if len(keep_frames_parsed) == 0  or image_outputs or  (overlapped_frames_num + len(keep_frames_parsed)) == input_frames.shape[1] and all(keep_frames_parsed) : keep_frames_parsed = [] 
                 injection_denoising_step = int(sampling_steps * (1. - denoising_strength) )
                 latent_keep_frames = []
-                if source_latents.shape[1] < lat_frames or len(keep_frames_parsed) > 0:
+                if source_latents.shape[2] < lat_frames or len(keep_frames_parsed) > 0:
                     inject_from_start = True
                     if len(keep_frames_parsed) >0 :
                         if overlapped_frames_num > 0: keep_frames_parsed = [True] * overlapped_frames_num + keep_frames_parsed
@@ -638,6 +638,7 @@ class WanAny2V:
                             latent_keep_frames.append(all(keep_frames_parsed[i:i+4]))
                 else:
                     timesteps = timesteps[injection_denoising_step:]
+                    start_step_no = injection_denoising_step
                     if hasattr(sample_scheduler, "timesteps"): sample_scheduler.timesteps = timesteps
                     if hasattr(sample_scheduler, "sigmas"): sample_scheduler.sigmas= sample_scheduler.sigmas[injection_denoising_step:]
                     injection_denoising_step = 0
@@ -656,7 +657,7 @@ class WanAny2V:
                 height, width = (height // 32) * 32, (width // 32) * 32 
             else:
                 height, width = input_video.shape[-2:]
-                source_latents = self.vae.encode([input_video])[0].unsqueeze(0)
+                source_latents = self.vae.encode([input_video], tile_size = VAE_tile_size)[0].unsqueeze(0)
                 timestep_injection = True
 
         # Vace
@@ -722,16 +723,17 @@ class WanAny2V:
         kwargs["freqs"] = freqs
 
         # Steps Skipping
-        cache_type = self.model.enable_cache 
-        if cache_type != None:
+        skip_steps_cache = self.model.cache
+        if skip_steps_cache != None:
+            cache_type = skip_steps_cache.cache_type
             x_count = 3 if phantom or fantasy or multitalk else 2
-            self.model.previous_residual = [None] * x_count
+            skip_steps_cache.previous_residual = [None] * x_count
             if cache_type == "tea":
-                self.model.compute_teacache_threshold(self.model.cache_start_step, timesteps, self.model.cache_multiplier)
+                self.model.compute_teacache_threshold(max(skip_steps_cache.start_step, start_step_no), original_timesteps, skip_steps_cache.multiplier)
             else: 
-                self.model.compute_magcache_threshold(self.model.cache_start_step, timesteps, self.model.cache_multiplier)
-                self.model.accumulated_err, self.model.accumulated_steps, self.model.accumulated_ratio  = [0.0] * x_count, [0] * x_count, [1.0] * x_count
-                self.model.one_for_all = x_count > 2
+                self.model.compute_magcache_threshold(max(skip_steps_cache.start_step, start_step_no), original_timesteps, skip_steps_cache.multiplier)
+                skip_steps_cache.accumulated_err, skip_steps_cache.accumulated_steps, skip_steps_cache.accumulated_ratio  = [0.0] * x_count, [0] * x_count, [1.0] * x_count
+                skip_steps_cache.one_for_all = x_count > 2
 
         if callback != None:
             callback(-1, None, True)
@@ -751,6 +753,7 @@ class WanAny2V:
                     model_switch_step = i
                     break
             update_loras_slists(self.model, loras_slists, updated_num_steps, model_switch_step= model_switch_step)
+            if self.model2 is not None: update_loras_slists(self.model2, loras_slists, updated_num_steps, model_switch_step= model_switch_step)
             callback(-1, None, True, override_num_inference_steps = updated_num_steps)
 
         if sample_scheduler != None:
@@ -781,7 +784,7 @@ class WanAny2V:
                 timestep = torch.full((target_shape[-3],), t, dtype=torch.int64, device=latents.device)
                 timestep[:source_latents.shape[2]] = 0
                         
-            kwargs.update({"t": timestep, "current_step": i})  
+            kwargs.update({"t": timestep, "current_step": start_step_no + i})  
             kwargs["slg_layers"] = slg_layers if int(slg_start * sampling_steps) <= i < int(slg_end * sampling_steps) else None
 
             if denoising_strength < 1 and input_frames != None and i <= injection_denoising_step:
@@ -789,14 +792,14 @@ class WanAny2V:
                 noise = torch.randn(batch_size, *target_shape, dtype=torch.float32, device=self.device, generator=seed_g)
                 if inject_from_start:
                     new_latents = latents.clone()
-                    new_latents[:,:, :source_latents.shape[1] ] = noise[:, :, :source_latents.shape[1] ] * sigma + (1 - sigma) * source_latents.unsqueeze(0)
+                    new_latents[:,:, :source_latents.shape[2] ] = noise[:, :, :source_latents.shape[2] ] * sigma + (1 - sigma) * source_latents
                     for latent_no, keep_latent in enumerate(latent_keep_frames):
                         if not keep_latent:
                             new_latents[:, :, latent_no:latent_no+1 ] = latents[:, :, latent_no:latent_no+1]
                     latents = new_latents
                     new_latents = None
                 else:
-                    latents = noise * sigma + (1 - sigma) * source_latents.unsqueeze(0)
+                    latents = noise * sigma + (1 - sigma) * source_latents
                 noise = None
 
             if extended_overlapped_latents != None:
@@ -808,7 +811,7 @@ class WanAny2V:
                         zz[0:16, ref_images_count:extended_overlapped_latents.shape[2] ]   = extended_overlapped_latents[0, :, ref_images_count:]  * (1.0 - overlap_noise_factor) + torch.randn_like(extended_overlapped_latents[0, :, ref_images_count:] ) * overlap_noise_factor 
 
             if target_camera != None:
-                latent_model_input = torch.cat([latents, source_latents.unsqueeze(0).expand(*expand_shape)], dim=2) # !!!!
+                latent_model_input = torch.cat([latents, source_latents.expand(*expand_shape)], dim=2)
             else:
                 latent_model_input = latents
 

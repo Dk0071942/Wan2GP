@@ -2,7 +2,7 @@ import torch
 
 def get_qwen_text_encoder_filename(text_encoder_quantization):
     text_encoder_filename = "ckpts/Qwen2.5-VL-7B-Instruct/Qwen2.5-VL-7B-Instruct_bf16.safetensors"
-    if text_encoder_quantization =="int8" and False:
+    if text_encoder_quantization =="int8":
         text_encoder_filename = text_encoder_filename.replace("bf16", "quanto_bf16_int8") 
     return text_encoder_filename
 
@@ -11,10 +11,11 @@ class family_handler():
     def query_model_def(base_model_type, model_def):
         model_def_output = {
             "image_outputs" : True,
-            "no_negative_prompt" : True,
+            "sample_solvers":[
+                            ("Default", "default"),
+                            ("Lightning", "lightning")]
         }
 
-        model_def_output["embedded_guidance"] = True
 
         return model_def_output
 
@@ -40,7 +41,7 @@ class family_handler():
         return  {  
             "repoId" : "DeepBeepMeep/Qwen_image", 
             "sourceFolderList" :  ["", "Qwen2.5-VL-7B-Instruct"],
-            "fileList" : [ ["qwen_vae.safetensors", "qwen_vae_config.json", "qwen_scheduler_config.json"], ["merges.txt", "tokenizer_config.json", "config.json", "vocab.json"] + computeList(text_encoder_filename)  ]
+            "fileList" : [ ["qwen_vae.safetensors", "qwen_vae_config.json"], ["merges.txt", "tokenizer_config.json", "config.json", "vocab.json"] + computeList(text_encoder_filename)  ]
             }
 
     @staticmethod
@@ -66,10 +67,17 @@ class family_handler():
 
         return pipe_processor, pipe
 
+
+    @staticmethod
+    def fix_settings(base_model_type, settings_version, model_def, ui_defaults):
+        if ui_defaults.get("sample_solver", "") == "": 
+            ui_defaults["sample_solver"] = "default"
+
     @staticmethod
     def update_default_settings(base_model_type, model_def, ui_defaults):
         ui_defaults.update({
-            "embedded_guidance":  4,
+            "guidance_scale":  4,
+            "sample_solver": "default",
         })            
         if model_def.get("reference_image", False):
             ui_defaults.update({
