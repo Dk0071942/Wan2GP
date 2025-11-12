@@ -26,6 +26,7 @@ from diffusers.models.embeddings import TimestepEmbedding, Timesteps
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.normalization import AdaLayerNormContinuous, RMSNorm
 from shared.attention import pay_attention
+import functools
 
 def get_timestep_embedding(
     timesteps: torch.Tensor,
@@ -150,8 +151,8 @@ class QwenEmbedRope(nn.Module):
         super().__init__()
         self.theta = theta
         self.axes_dim = axes_dim
-        pos_index = torch.arange(1024)
-        neg_index = torch.arange(1024).flip(0) * -1 - 1
+        pos_index = torch.arange(4096)
+        neg_index = torch.arange(4096).flip(0) * -1 - 1
         self.pos_freqs = torch.cat(
             [
                 self.rope_params(pos_index, self.axes_dim[0], self.theta),
@@ -170,7 +171,7 @@ class QwenEmbedRope(nn.Module):
         )
         self.rope_cache = {}
 
-        # 是否使用 scale rope
+        # DO NOT USING REGISTER BUFFER HERE, IT WILL CAUSE COMPLEX NUMBERS LOSE ITS IMAGINARY PART
         self.scale_rope = scale_rope
 
     def rope_params(self, index, dim, theta=10000):
@@ -194,37 +195,52 @@ class QwenEmbedRope(nn.Module):
 
         if isinstance(video_fhw, list):
             video_fhw = video_fhw[0]
-        frame, height, width = video_fhw
-        rope_key = f"{frame}_{height}_{width}"
+        if not isinstance(video_fhw, list):
+            video_fhw = [video_fhw]
 
-        if rope_key not in self.rope_cache:
-            seq_lens = frame * height * width
-            freqs_pos = self.pos_freqs.split([x // 2 for x in self.axes_dim], dim=1)
-            freqs_neg = self.neg_freqs.split([x // 2 for x in self.axes_dim], dim=1)
-            freqs_frame = freqs_pos[0][:frame].view(frame, 1, 1, -1).expand(frame, height, width, -1)
-            if self.scale_rope:
-                freqs_height = torch.cat([freqs_neg[1][-(height - height // 2) :], freqs_pos[1][: height // 2]], dim=0)
-                freqs_height = freqs_height.view(1, height, 1, -1).expand(frame, height, width, -1)
-                freqs_width = torch.cat([freqs_neg[2][-(width - width // 2) :], freqs_pos[2][: width // 2]], dim=0)
-                freqs_width = freqs_width.view(1, 1, width, -1).expand(frame, height, width, -1)
+        vid_freqs = []
+        max_vid_index = 0
+        for idx, fhw in enumerate(video_fhw):
+            frame, height, width = fhw
+            rope_key = f"{idx}_{height}_{width}"
 
+            if not torch.compiler.is_compiling() and False:
+                if rope_key not in self.rope_cache:
+                    self.rope_cache[rope_key] = self._compute_video_freqs(frame, height, width, idx)
+                video_freq = self.rope_cache[rope_key]
             else:
-                freqs_height = freqs_pos[1][:height].view(1, height, 1, -1).expand(frame, height, width, -1)
-                freqs_width = freqs_pos[2][:width].view(1, 1, width, -1).expand(frame, height, width, -1)
+                video_freq = self._compute_video_freqs(frame, height, width, idx)
+            video_freq = video_freq.to(device)
+            vid_freqs.append(video_freq)
 
-            freqs = torch.cat([freqs_frame, freqs_height, freqs_width], dim=-1).reshape(seq_lens, -1)
-            self.rope_cache[rope_key] = freqs.clone().contiguous()
-        vid_freqs = self.rope_cache[rope_key]
-
-        if self.scale_rope:
-            max_vid_index = max(height // 2, width // 2)
-        else:
-            max_vid_index = max(height, width)
+            if self.scale_rope:
+                max_vid_index = max(height // 2, width // 2, max_vid_index)
+            else:
+                max_vid_index = max(height, width, max_vid_index)
 
         max_len = max(txt_seq_lens)
         txt_freqs = self.pos_freqs[max_vid_index : max_vid_index + max_len, ...]
+        vid_freqs = torch.cat(vid_freqs, dim=0)
 
         return vid_freqs, txt_freqs
+
+    def _compute_video_freqs(self, frame, height, width, idx=0):
+        seq_lens = frame * height * width
+        freqs_pos = self.pos_freqs.split([x // 2 for x in self.axes_dim], dim=1)
+        freqs_neg = self.neg_freqs.split([x // 2 for x in self.axes_dim], dim=1)
+
+        freqs_frame = freqs_pos[0][idx : idx + frame].view(frame, 1, 1, -1).expand(frame, height, width, -1)
+        if self.scale_rope:
+            freqs_height = torch.cat([freqs_neg[1][-(height - height // 2) :], freqs_pos[1][: height // 2]], dim=0)
+            freqs_height = freqs_height.view(1, height, 1, -1).expand(frame, height, width, -1)
+            freqs_width = torch.cat([freqs_neg[2][-(width - width // 2) :], freqs_pos[2][: width // 2]], dim=0)
+            freqs_width = freqs_width.view(1, 1, width, -1).expand(frame, height, width, -1)
+        else:
+            freqs_height = freqs_pos[1][:height].view(1, height, 1, -1).expand(frame, height, width, -1)
+            freqs_width = freqs_pos[2][:width].view(1, 1, width, -1).expand(frame, height, width, -1)
+
+        freqs = torch.cat([freqs_frame, freqs_height, freqs_width], dim=-1).reshape(seq_lens, -1)
+        return freqs.clone().contiguous()
 
 
 class QwenDoubleStreamAttnProcessor2_0:
@@ -467,6 +483,52 @@ class QwenImageTransformer2DModel(nn.Module):
     _no_split_modules = ["QwenImageTransformerBlock"]
     _skip_layerwise_casting_patterns = ["pos_embed", "norm"]
 
+
+    def preprocess_loras(self, model_type, sd):
+
+        first = next(iter(sd), None)
+        if first == None:
+            return sd
+
+        new_sd = {}
+        for k,v in sd.items():
+            k = k.replace(".lora.", ".lora_")
+            k = k.replace(".default.weight", ".weight")
+            new_sd[k] = v
+        sd = new_sd  
+
+        prefix_list = ["lora_unet_transformer_blocks"]
+        for prefix in prefix_list: 
+            if first.startswith(prefix):
+                repl_list = ["attn", "img_mlp", "txt_mlp", "img_mod", "txt_mod"]
+                src_list = ["_" + k + "_" for k in repl_list]
+                tgt_list = ["." + k + "." for k in repl_list]
+                src_list2 = ["_0_", "_0.", "_1.", "_2."]
+                tgt_list2 = [".0.", ".0.", ".1.", ".2."]
+                new_sd = {}
+                for k,v in sd.items():
+                    k = "diffusion_model.transformer_blocks." + k[len(prefix)+1:]
+                    for s,t in zip(src_list, tgt_list):
+                        k = k.replace(s,t)
+                    for s,t in zip(src_list2, tgt_list2):
+                        k = k.replace(s,t)
+                    new_sd[k] = v
+                sd = new_sd  
+                return sd
+
+        prefix_list = ["transformer_blocks"]
+        for prefix in prefix_list: 
+            if first.startswith(prefix):
+                new_sd = {}
+                for k,v in sd.items():
+                    if k.startswith(prefix):
+                        k = "diffusion_model." + k
+                        new_sd[k] = v
+                sd = new_sd  
+                return sd
+        
+        return sd
+
     def __init__(
         self,
         patch_size: int = 2,
@@ -512,53 +574,30 @@ class QwenImageTransformer2DModel(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        encoder_hidden_states: torch.Tensor = None,
-        encoder_hidden_states_mask: torch.Tensor = None,
+        encoder_hidden_states_list  = None,
+        encoder_hidden_states_mask_list = None,
         timestep: torch.LongTensor = None,
         img_shapes: Optional[List[Tuple[int, int, int]]] = None,
-        txt_seq_lens: Optional[List[int]] = None,
+        txt_seq_lens_list  = None,
         guidance: torch.Tensor = None,  # TODO: this should probably be removed
         attention_kwargs: Optional[Dict[str, Any]] = None,
-        return_dict: bool = True,
         callback= None,
         pipeline =None,
     ) -> Union[torch.Tensor, Transformer2DModelOutput]:
-        """
-        The [`QwenTransformer2DModel`] forward method.
-
-        Args:
-            hidden_states (`torch.Tensor` of shape `(batch_size, image_sequence_length, in_channels)`):
-                Input `hidden_states`.
-            encoder_hidden_states (`torch.Tensor` of shape `(batch_size, text_sequence_length, joint_attention_dim)`):
-                Conditional embeddings (embeddings computed from the input conditions such as prompts) to use.
-            encoder_hidden_states_mask (`torch.Tensor` of shape `(batch_size, text_sequence_length)`):
-                Mask of the input conditions.
-            timestep ( `torch.LongTensor`):
-                Used to indicate denoising step.
-            attention_kwargs (`dict`, *optional*):
-                A kwargs dictionary that if specified is passed along to the `AttentionProcessor` as defined under
-                `self.processor` in
-                [diffusers.models.attention_processor](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/attention_processor.py).
-            return_dict (`bool`, *optional*, defaults to `True`):
-                Whether or not to return a [`~models.transformer_2d.Transformer2DModelOutput`] instead of a plain
-                tuple.
-
-        Returns:
-            If `return_dict` is True, an [`~models.transformer_2d.Transformer2DModelOutput`] is returned, otherwise a
-            `tuple` where the first element is the sample tensor.
-        """
-        if attention_kwargs is not None:
-            attention_kwargs = attention_kwargs.copy()
-            lora_scale = attention_kwargs.pop("scale", 1.0)
-        else:
-            lora_scale = 1.0
+        
 
         hidden_states = self.img_in(hidden_states)
-
         timestep = timestep.to(hidden_states.dtype)
-        encoder_hidden_states = self.txt_norm(encoder_hidden_states)
-        encoder_hidden_states = self.txt_in(encoder_hidden_states)
-
+        hidden_states_list = [hidden_states if i == 0 else hidden_states.clone() for i, _ in enumerate(encoder_hidden_states_list)]
+        
+        new_encoder_hidden_states_list = []
+        for encoder_hidden_states in encoder_hidden_states_list:
+            encoder_hidden_states = self.txt_norm(encoder_hidden_states)
+            encoder_hidden_states = self.txt_in(encoder_hidden_states)
+            new_encoder_hidden_states_list.append(encoder_hidden_states)
+        encoder_hidden_states_list = new_encoder_hidden_states_list
+        new_encoder_hidden_states_list = encoder_hidden_states = None
+        
         if guidance is not None:
             guidance = guidance.to(hidden_states.dtype) * 1000
 
@@ -568,27 +607,30 @@ class QwenImageTransformer2DModel(nn.Module):
             else self.time_text_embed(timestep, guidance, hidden_states)
         )
 
-        image_rotary_emb = self.pos_embed(img_shapes, txt_seq_lens, device=hidden_states.device)
+        image_rotary_emb_list = [ self.pos_embed(img_shapes, txt_seq_lens, device=hidden_states.device) for txt_seq_lens in txt_seq_lens_list] 
+
+        hidden_states = None
 
         for index_block, block in enumerate(self.transformer_blocks):
             if callback != None:
                 callback(-1, None, False, True)
             if pipeline._interrupt:
-                return [None]
-            encoder_hidden_states, hidden_states = block(
-                hidden_states=hidden_states,
-                encoder_hidden_states=encoder_hidden_states,
-                encoder_hidden_states_mask=encoder_hidden_states_mask,
-                temb=temb,
-                image_rotary_emb=image_rotary_emb,
-                joint_attention_kwargs=attention_kwargs,
-            )
+                return [None] * len(hidden_states_list)
+            for hidden_states, encoder_hidden_states, encoder_hidden_states_mask, image_rotary_emb in zip(hidden_states_list, encoder_hidden_states_list, encoder_hidden_states_mask_list, image_rotary_emb_list):
+                encoder_hidden_states[...], hidden_states[...] = block(
+                    hidden_states=hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    encoder_hidden_states_mask=encoder_hidden_states_mask,
+                    temb=temb,
+                    image_rotary_emb=image_rotary_emb,
+                    joint_attention_kwargs=attention_kwargs,
+                )
 
         # Use only the image part (hidden_states) from the dual-stream blocks
-        hidden_states = self.norm_out(hidden_states, temb)
-        output = self.proj_out(hidden_states)
+        output_list = []
+        for i in range(len(hidden_states_list)):
+            hidden_states = self.norm_out(hidden_states_list[i], temb)
+            hidden_states_list[i] = None
+            output_list.append(self.proj_out(hidden_states))
 
-        if not return_dict:
-            return (output,)
-
-        return Transformer2DModelOutput(sample=output)
+        return output_list

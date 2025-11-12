@@ -7,169 +7,166 @@
 
 WanGP supports the Wan (and derived models), Hunyuan Video and LTV Video models with:
 - Low VRAM requirements (as low as 6 GB of VRAM is sufficient for certain models)
-- Support for old GPUs (RTX 10XX, 20xx, ...)
+- Support for old Nvidia GPUs (RTX 10XX, 20xx, ...)
+- Support for AMD GPUs Radeon RX 76XX, 77XX, 78XX & 79XX, instructions in the Installation Section Below.
 - Very Fast on the latest GPUs
 - Easy to use Full Web based interface
 - Auto download of the required model adapted to your specific architecture
 - Tools integrated to facilitate Video Generation : Mask Editor, Prompt Enhancer, Temporal and Spatial Generation, MMAudio, Video Browser, Pose / Depth / Flow extractor
 - Loras Support to customize each model
-- Queuing system : make your shopping list of videos to generate and come back later 
+- Queuing system : make your shopping list of videos to generate and come back later
 
 **Discord Server to get Help from Other Users and show your Best Videos:** https://discord.gg/g7efUW9jGV
 
 **Follow DeepBeepMeep on Twitter/X to get the Latest News**: https://x.com/deepbeepmeep
 
+-----
+
+### You have your choice of Dark or Light Theme
+
+
+<img width="1895" height="1023" alt="Screenshot 2025-10-23 210313" src="https://github.com/user-attachments/assets/3778ae4e-6a95-4752-ba47-bb160c653310" />
+
+-----
+<img width="1899" height="1020" alt="Screenshot 2025-10-23 210500" src="https://github.com/user-attachments/assets/5e524260-ad24-4203-acf2-6622676a83bb" />
+
+-----
+![Screen Recording 2025-10-23 210625 - frame at 0m9s](https://github.com/user-attachments/assets/c65a815e-09fa-41a7-bc49-5f879b0b8ece)
+
+-----
+
 ## 🔥 Latest Updates : 
-### August 6 2025: WanGP v7.7 - Picky, picky
+### November 11 2025: WanGP v9.42, Free Lunch
 
-This release comes with two new models :
-- Qwen Image: a Commercial grade Image generator capable to inject full sentences in the generated Image while still offering incredible visuals
-- Wan 2.2 TextImage to Video 5B: the last Wan 2.2 needed if you want to complete your Wan 2.2 collection (loras for this folder can be stored in "\loras\5B"     )
+**VAE Upsampler** for Wan 2.1/2.2 Text 2 Image and Qwen Image: *spacepxl* has tweaked the VAE Decoder used by *Wan* & *Qwen* so that it can decode and upsample x2 at the same time. The end Result is a Fast High Quality Image Upsampler (much better than Lanczos). Check the *Postprocessing Tab* / *Spatial Upsampling* Dropdown box. Unfortunately this will work only with Image Generation, no support yet for Video Generation. I have also added a VAE Refiner that keeps the existing resolution but slightly improves the details.
 
-There is catch though, they are very picky if you want to get good generations: first they both need lots of steps (50 ?) to show what they have to offer. Then for Qwen Image I had to hardcode the supported resolutions, because if you try anything else, you will get garbage. Likiwise Wan 2.2 5B will remind you of Wan 1.0 if you don't ask for at least  720p. 
+**Mocha**: a very requested alternative to *Wan Animate* . Use this model to replace a person in a control video. For best results you will need to provide two reference images for the new the person, the second image should be a face close up. This model seems to be optimized to generate 81 frames. First output frame is often messed up. *Lightx2v t2v 4 steps Lora Accelarator* works well. Please note this model is VRAM hungry, for 81 frames to generate it will process internaly 161 frames.
 
-Please note that the VAE decoding of Wan 2.2 TextImage is not tiled yet and it may produce VRAM consumption peaks (this doens't mix well with the 720p requirement).
+**Lucy Edit v1.1**: a new version (finetune) has been released. Not sure yet if I like it better than the original one. In theory it should work better with changing the background setting for instance.
 
+**Ovi 1.1**: This new version exists in two flavors 5s & 10s ! Thanks to WanGP VRAM optimisations only 8 GB will be only needed for a 10s generation. Beware, the Prompt syntax has slightly changed since an audio background is now introduced using *"Audio:"* instead of using tags.
 
-### August 4 2025: WanGP v7.6 - Remuxed
+*update 9.41*: Added Mocha & Lucy Edit 1.1\
+*update 9.42*: Added Ovi 1.1
 
-With this new version you won't have any excuse if there is no sound in your video.
+### November 6 2025: WanGP v9.35, How many bananas are too many bananas ?
 
-*Continue Video* now works with any video that has already some sound (hint: Multitalk ).
+**Chrono Edit**: a new original way to edit an Image. This one will generate a Video will that performs the full edition work and return the last Image. It can be hit or a miss but when it works it is quite impressive. Please note you must absolutely use the *Prompt Enhancer* on your *Prompt Instruction* because this model expects a very specific format. The Prompt Enhancer for this model has a specific System Prompt to generate the right Chrono Edit Prompt.
 
-Also, on top of MMaudio and the various sound driven models I have added the ability to use your own soundtrack.
+**LyCoris** support: preliminary basic Lycoris support for this Lora format. At least Qwen Multi Camera should work (https://huggingface.co/dx8152/Qwen-Edit-2509-Multiple-angles). If you have a Lycoris that does not work and it may be interesting please mention it in the Request Channel
 
-As a result you can apply a different sound source on each new video segment when doing a *Continue Video*. 
+**i2v Enhanced Lightning v2** (update 9.37): added this impressive *Finetune* in the default selection of models, not only it is accelerated (4 steps), but it is very good at following camera and timing instructions.
 
-For instance:
-- first video part: use Multitalk with two people speaking
-- second video part: you apply your own soundtrack which will gently follow the multitalk conversation
-- third video part: you use Vace effect and its corresponding control audio will be concatenated to the rest of the audio
+This finetune loves long prompts. Therefore to increase the prompt readability WanGP supports now multilines prompts (in option).
 
-To multiply the combinations I have also implemented *Continue Video* with the various image2video models.
+*update 9.35*: Added a Sample PlugIn App that shows how to collect and modify settings from a PlugIn\
+*update 9.37*: Added i2v Enhanced Lightning
 
-Also:
-- End Frame support added for LTX Video models
-- Loras can now be targetted specifically at the High noise or Low noise models with Wan 2.2, check the Loras and Finetune guides
-- Flux Krea Dev support
-
-### July 30 2025: WanGP v7.5:  Just another release ... Wan 2.2 part 2
-Here is now Wan 2.2 image2video a very good model if you want to set Start and End frames. Two Wan 2.2 models delivered, only one to go ...
-
-Please note that although it is an image2video model it is structurally very close to Wan 2.2 text2video (same layers with only a different initial projection). Given that Wan 2.1 image2video loras don't work too well (half of their tensors are not supported), I have decided that this model will look for its loras in the text2video loras folder instead of the image2video folder.
-
-I have also optimized RAM management with Wan 2.2 so that loras and modules will be loaded only once in RAM and Reserved RAM, this saves up to 5 GB of RAM which can make a difference...
-
-And this time I really removed Vace Cocktail Light which gave a blurry vision.
-
-### July 29 2025: WanGP v7.4:  Just another release ... Wan 2.2 Preview
-Wan 2.2 is here.  The good news is that WanGP wont require a single byte of extra VRAM to run it and it will be as fast as Wan 2.1. The bad news is that you will need much more RAM if you want to leverage entirely this new model since it has twice has many parameters.
-
-So here is a preview version of Wan 2.2 that is without the 5B model and Wan 2.2 image to video for the moment.
-
-However as I felt bad to deliver only half of the wares, I gave you instead .....** Wan 2.2 Vace Experimental Cocktail** !
-
-Very good surprise indeed, the loras and Vace partially work with Wan 2.2. We will need to wait for the official Vace 2.2 release since some Vace features are broken like identity preservation
-
-Bonus zone: Flux multi images conditions has been added, or maybe not if I broke everything as I have been distracted by Wan...
-
-7.4 update: I forgot to update the version number. I also removed Vace Cocktail light which didnt work well.
-
-### July 27 2025: WanGP v7.3 : Interlude
-While waiting for Wan 2.2, you will appreciate the model selection hierarchy which is very useful to collect even more models. You will also appreciate that WanGP remembers which model you used last in each model family.
-
-### July 26 2025: WanGP v7.2 : Ode to Vace
-I am really convinced that Vace can do everything the other models can do and in a better way especially as Vace can be combined with Multitalk.
-
-Here are some new Vace improvements:
-- I have provided a default finetune named *Vace Cocktail*  which is a model created on the fly using the Wan text 2 video model and the Loras used to build FusioniX. The weight of the *Detail Enhancer* Lora has been reduced to improve identity preservation. Copy the model definition in *defaults/vace_14B_cocktail.json* in the *finetunes/* folder to change the Cocktail composition. Cocktail contains already some Loras acccelerators so no need to add on top a Lora Accvid, Causvid or Fusionix, ... . The whole point of Cocktail is to be able  to build you own FusioniX (which originally is a combination of 4 loras) but without the inconvenient of FusioniX.
-- Talking about identity preservation, it tends to go away when one generates a single Frame instead of a Video which is shame for our Vace photoshop. But there is a solution : I have added an Advanced Quality option, that tells WanGP to generate a little more than a frame (it will still keep only the first frame). It will be a little slower but you will be amazed how Vace Cocktail combined with this option will preserve identities (bye bye *Phantom*). 
-- As in practise I have observed one switches frequently between *Vace text2video* and *Vace text2image* I have put them in the same place they are now just one tab away, no need to reload the model. Likewise *Wan text2video* and *Wan tex2image* have been merged.
-- Color fixing when using Sliding Windows. A new postprocessing *Color Correction* applied automatically by default (you can disable it in the *Advanced tab Sliding Window*) will try to match the colors of the new window with that of the previous window. It doesnt fix all the unwanted artifacts of the new window but at least this makes the transition smoother. Thanks to the multitalk team for the original code.
-
-Also you will enjoy our new real time statistics (CPU / GPU usage, RAM / VRAM used, ... ). Many thanks to **Redtash1** for providing the framework for this new feature ! You need to go in the Config tab to enable real time stats.
+### October 29 2025: WanGP v9.21, Why isn't all my VRAM used ?
 
 
-### July 21 2025: WanGP v7.12
-- Flux Family Reunion : *Flux Dev* and *Flux Schnell* have been invited aboard WanGP. To celebrate that, Loras support for the Flux *diffusers* format has also been added.
+*WanGP exclusive*:  VRAM requirements have never been that low !
 
-- LTX Video upgraded to version 0.9.8: you can now generate 1800 frames (1 min of video !) in one go without a sliding window. With the distilled model it will take only 5 minutes with a RTX 4090 (you will need 22 GB of VRAM though). I have added options to select higher humber frames if you want to experiment (go to Configuration Tab / General / Increase the Max Number of Frames, change the value and restart the App)
+**Wan 2.2 Ovi 10 GB** for all the GPU Poors of the World: *only 6 GB of VRAM to generate 121 frames at 720p*. With 16 GB of VRAM, you may even be able to load all the model in VRAM with *Memory Profile 3*
 
-- LTX Video ControlNet : it is a Control Net that allows you for instance to transfer a Human motion or Depth from a control video. It is not as powerful as Vace but can produce interesting things especially as now you can generate quickly a 1 min video. Under the scene IC-Loras (see below) for Pose, Depth and Canny are automatically loaded for you, no need to add them. 
+To get the x10 speed effect just apply the FastWan Lora Accelerator that comes prepackaged with Ovi (acccessible in the  dropdown box Settings at the top)
 
-- LTX IC-Lora support: these are special Loras that consumes a conditional image or video
-Beside the pose, depth and canny IC-Loras transparently loaded there is the *detailer* (https://huggingface.co/Lightricks/LTX-Video-ICLoRA-detailer-13b-0.9.8) which is basically an upsampler. Add the *detailer* as a Lora and use LTX Raw Format as control net choice to use it.
+After thorough testing it appears that *Pytorch 2.8* is causing RAM memory leaks when switching models as it won't release all the RAM. I could not find any workaround. So the default Pytorch version to use with WanGP is back to *Pytorch 2.7*
+Unless you want absolutely to use Pytorch compilation which is not stable with Pytorch 2.7 with RTX 50xx , it is recommended to switch back to Pytorch 2.7.1 (tradeoff between 2.8 and 2.7):
+```bash
+cd Wan2GP
+conda activate wan2gp
+pip install torch==2.7.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/test/cu128
+```
+You will need to reinstall SageAttention FlashAttnetion, ...
 
-- Matanyone is now also for the GPU Poor as its VRAM requirements have been divided by 2! (7.12 shadow update)
+*update v9.21*: Got FastWan to work with Ovi: it is now 10 times faster ! (not including the VAE)\
+*update v9.25*: added Chroma Radiance october edition + reverted to pytorch 2.7
 
-- Easier way to select video resolution 
+### October 24 2025: WanGP v9.10, What else will you ever need after this one ?
+
+With WanGP v9 you will have enough features to go to a desert island with no internet connection and comes back with a full Hollywood movie.
+
+First here are the new models supported:
+- **Wan 2.1 Alpha** : a very requested model that can generate videos with *semi transparent background* (as it is very lora picky it supports only the *Self Forcing / lightning* loras accelerators)
+- **Chatterbox Multilingual**: the first *Voice Generator* in WanGP. Let's say you have a flu and lost your voice (somehow I can't think of another usecase), the world will still be able to hear you as *Chatterbox* can generate up to 15s clips of your voice using a recorded voice sample. Chatterbox works with numerous languages out the box.
+- **Flux DreamOmni2** : another wannabe *Nano Banana* image Editor / image composer. The *Edit Mode* ("Conditional Image is first Main Subject ...") seems to work better than the *Gen Mode* (Conditional Images are People / Objects ..."). If you have at least 16 GB of VRAM it is recommended to force profile 3 for this model (it uses an autoregressive model for the prompt encoding and the start may be slow).
+- **Ditto** (new with *WanGP 9.1* !): a powerful Video 2 Video model, can change for instance the style or the material visible in the video. Be aware it is an instruct based model, so the prompt should contain intructions. 
+
+Upgraded Features:
+- A new **Audio Gallery** to store your Chatterbox generations and import your audio assets. *Metadata support* (stored gen settings) for *Wav files* generated with WanGP available from day one. 
+- **Matanyone** improvements: you can now use it during a video gen, it will *suspend gracefully the Gen in progress*. *Input Video / Images* can be resized for faster processing & lower VRAM. Image version can now generate *Green screens* (not used by WanGP but I did it because someone asked for it and I am nice) and *Alpha masks*.
+- **Images Stored in Metadata**: Video Gen *Settings Metadata* that are stored in the Generated Videos can now contain the Start Image, Image Refs used to generate the Video. Many thanks to **Gunther-Schulz** for this contribution
+- **Three Levels of Hierarchy** to browse the models / finetunes: you can collect as many finetunes as you want now and they will no longer encumber the UI.
+- Added **Loras Accelerators** for *Wan 2.1 1.3B*, *Wan 2.2 i2v*, *Flux* and the latest *Wan 2.2 Lightning*
+- Finetunes now support **Custom Text Encoders** : you will need to use the "text_encoder_URLs" key. Please check the finetunes doc. 
+- Sometime Less is More: removed the palingenesis finetunes that were controversial
+
+Huge Kudos & Thanks to **Tophness** that has outdone himself with these Great Features:
+- **Multicolors Queue** items with **Drag & Drop** to reorder them
+- **Edit a Gen Request** that is already in the queue
+- Added **Plugin support** to WanGP : found that features are missing in WanGP, you can now add tabs at the top in WanGP. Each tab may contain a full embedded App that can share data with the Video Generator of WanGP. Please check the Plugin guide written by Tophness and don't hesitate to contact him or me on the Discord if you have a plugin you want to share. I have added a new Plugins channels to discuss idea of plugins and help each other developing plugins. *Idea for a PlugIn that may end up popular*: a screen where you view the hard drive space used per model and that will let you remove unused models weights
+- Two Plugins ready to use designed & developped by **Tophness**: an **Extended Gallery** and a **Lora multipliers Wizard**
+
+WanGP v9 is now targetting Pytorch 2.8 although it should still work with 2.7, don't forget to upgrade by doing:
+```bash
+pip install torch==2.8.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/test/cu128
+```
+You will need to upgrade Sage Attention or Flash (check the installation guide)
+
+*Update info: you might have some git error message while upgrading to v9 if WanGP is already installed.*
+Sorry about that if that's the case, you will need to reinstall WanGP.
+There are two different ways to fix this issue while still preserving your data:
+1) **Command Line**
+If you have access to a terminal window :
+```
+cd installation_path_of_wangp
+git fetch origin && git reset --hard origin/main
+pip install -r requirements.txt
+```
+
+2) **Generic Method**
+a) move outside the installation WanGP folder the folders **ckpts**, **settings**, **outputs** and all the **loras** folders and the file **wgp_config.json**
+b) delete the WanGP folder and reinstall
+c) move back what you moved in a)
+
+## 🔥 Latest Updates : 
+### October 6 2025: WanGP v8.999 - A few last things before the Big Unknown ...
+
+This new version hasn't any new model...
+
+...but temptation to upgrade will be high as it contains a few Loras related features that may change your Life:
+- **Ready to use Loras Accelerators Profiles** per type of model that you can apply on your current *Generation Settings*. Next time I will recommend a *Lora Accelerator*, it will be only one click away. And best of all of the required Loras will be downloaded automatically. When you apply an *Accelerator Profile*, input fields like the *Number of Denoising Steps* *Activated Loras*, *Loras Multipliers* (such as "1;0 0;1" ...) will be automatically filled. However your video specific fields will be preserved, so it will be easy to switch between Profiles to experiment. With *WanGP 8.993*, the *Accelerator Loras* are now merged with *Non Accelerator Loras". Things are getting too easy...
+
+- **Embedded Loras URL** : WanGP will now try to remember every Lora URLs it sees. For instance if someone sends you some settings that contain Loras URLs or you extract the Settings of Video generated by a friend with Loras URLs, these URLs will be automatically added to *WanGP URL Cache*. Conversely everything you will share (Videos, Settings, Lset files) will contain the download URLs if they are known. You can also download directly a Lora in WanGP by using the *Download Lora* button a the bottom. The Lora will be immediatly available and added to WanGP lora URL cache. This will work with *Hugging Face* as a repository. Support for CivitAi will come as soon as someone will nice enough to post a GitHub PR ...
+
+- **.lset file** supports embedded Loras URLs. It has never been easier to share a Lora with a friend. As a reminder a .lset file can be created directly from *WanGP Web Interface* and it contains a list of Loras and their multipliers, a Prompt and Instructions how to use these loras (like the Lora's *Trigger*). So with embedded Loras URL, you can send an .lset file by email or share it on discord: it is just a 1 KB tiny text, but with it other people will be able to use Gigabytes Loras as these will be automatically downloaded. 
+
+I have created the new Discord Channel **share-your-settings** where you can post your *Settings* or *Lset files*. I will be pleased to add new Loras Accelerators in the list of WanGP *Accelerators Profiles if you post some good ones there. 
+
+*With the 8.993 update*, I have added support for **Scaled FP8 format**. As a sample case, I have created finetunes for the **Wan 2.2 PalinGenesis** Finetune which is quite popular recently. You will find it in 3 flavors : *t2v*, *i2v* and *Lightning Accelerated for t2v*.
+
+The *Scaled FP8 format* is widely used as it the format used by ... *ComfyUI*. So I except a flood of Finetunes in the *share-your-finetune* channel. If not it means this feature was useless and I will remove it &#x1F608;&#x1F608;&#x1F608;
+
+Not enough Space left on your SSD to download more models ? Would like to reuse Scaled FP8 files in your ComfyUI Folder without duplicating them ? Here comes *WanGP 8.994* **Multiple Checkpoints Folders** : you just need to move the files into different folders / hard drives or reuse existing folders and let know WanGP about it in the *Config Tab* and WanGP will be able to put all the parts together.   
+
+Last but not least the Lora's documentation has been updated.
+
+*update 8.991*: full power of *Vace Lynx* unleashed with new combinations such as Landscape + Face / Clothes + Face  / Injectd Frame (Start/End frames/...) + Face\
+*update 8.992*: optimized gen with Lora, should be 10% faster if many loras\
+*update 8.993*: Support for *Scaled FP8* format and samples *Paligenesis* finetunes, merged Loras Accelerators and Non Accelerators\
+*update 8.994*: Added custom checkpoints folders\
+*update 8.999*: fixed a lora + fp8 bug and version sync for the jump to the unknown 
+
+### September 30 2025: WanGP v8.9 - Combinatorics
+
+This new version of WanGP introduces **Wan 2.1 Lynx** the best Control Net so far to transfer *Facial Identity*. You will be amazed to recognize your friends even with a completely different hair style. Congrats to the *Byte Dance team* for this achievement. Lynx works quite with well *Fusionix t2v* 10 steps.
+
+*WanGP 8.9* also illustrate how existing WanGP features can be easily combined with new models. For instance with *Lynx* you will get out of the box *Video to Video* and *Image/Text to Image*.
+
+Another fun combination is *Vace* + *Lynx*, which works much better than *Vace StandIn*. I have added sliders to change the weight of Vace & Lynx to allow you to tune the effects.
 
 
-### July 15 2025: WanGP v7.0 is an AI Powered Photoshop
-This release turns the Wan models into Image Generators. This goes way more than allowing to generate a video made of single frame :
-- Multiple Images generated at the same time so that you can choose the one you like best.It is Highly VRAM optimized so that you can generate for instance 4 720p Images at the same time with less than 10 GB
-- With the *image2image* the original text2video WanGP becomes an image upsampler / restorer
-- *Vace image2image* comes out of the box with image outpainting, person / object replacement, ...
-- You can use in one click a newly Image generated as Start Image or Reference Image for a Video generation
-
-And to complete the full suite of AI Image Generators, Ladies and Gentlemen please welcome for the first time in WanGP : **Flux Kontext**.\
-As a reminder Flux Kontext is an image editor : give it an image and a prompt and it will do the change for you.\
-This highly optimized version of Flux Kontext will make you feel that you have been cheated all this time as WanGP Flux Kontext requires only 8 GB of VRAM to generate 4 images at the same time with no need for quantization.
-
-WanGP v7 comes with *Image2image* vanilla and *Vace FusinoniX*. However you can build your own finetune where you will combine a text2video or Vace model with any combination of Loras.
-
-Also in the news:
-- You can now enter the *Bbox* for each speaker in *Multitalk* to precisely locate who is speaking. And to save some headaches the *Image Mask generator* will give you the *Bbox* coordinates of an area you have selected.
-- *Film Grain* post processing to add a vintage look at your video
-- *First Last Frame to Video* model should work much better now as I have discovered rencently its implementation was not complete
-- More power for the finetuners, you can now embed Loras directly in the finetune definition. You can also override the default models (titles, visibility, ...) with your own finetunes. Check the doc that has been updated.
-
-
-### July 10 2025: WanGP v6.7, is NAG a game changer ? you tell me
-Maybe you knew that already but most *Loras accelerators* we use today (Causvid, FusioniX) don't use *Guidance* at all (that it is *CFG* is set to 1). This helps to get much faster generations but the downside is that *Negative Prompts* are completely ignored (including the default ones set by the models). **NAG** (https://github.com/ChenDarYen/Normalized-Attention-Guidance) aims to solve that by injecting the *Negative Prompt* during the *attention* processing phase.
-
-So WanGP 6.7 gives you NAG, but not any NAG, a *Low VRAM* implementation, the default one ends being VRAM greedy. You will find NAG in the *General* advanced tab for most Wan models. 
-
-Use NAG especially when Guidance is set to 1. To turn it on set the **NAG scale** to something around 10. There are other NAG parameters **NAG tau** and **NAG alpha** which I recommend to change only if you don't get good results by just playing with the NAG scale. Don't hesitate to share on this discord server the best combinations for these 3 parameters.
-
-The authors of NAG claim that NAG can also be used when using a Guidance (CFG > 1) and to improve the prompt adherence.
-
-### July 8 2025: WanGP v6.6, WanGP offers you **Vace Multitalk Dual Voices Fusionix Infinite** :
-**Vace** our beloved super Control Net has been combined with **Multitalk** the new king in town that can animate up to two people speaking (**Dual Voices**). It is accelerated by the **Fusionix** model and thanks to *Sliding Windows* support and *Adaptive Projected Guidance* (much slower but should reduce the reddish effect with long videos) your two people will be able to talk for very a long time (which is an **Infinite** amount of time in the field of video generation).
-
-Of course you will get as well *Multitalk* vanilla and also *Multitalk 720p* as a bonus.
-
-And since I am mister nice guy I have enclosed as an exclusivity an *Audio Separator* that will save you time to isolate each voice when using Multitalk with two people.
-
-As I feel like resting a bit I haven't produced yet a nice sample Video to illustrate all these new capabilities. But here is the thing, I ams sure you will publish in the *Share Your Best Video* channel your *Master Pieces*. The best ones will be added to the *Announcements Channel* and will bring eternal fame to its authors.
-
-But wait, there is more:
-- Sliding Windows support has been added anywhere with Wan models, so imagine with text2video recently upgraded in 6.5 into a video2video, you can now upsample very long videos regardless of your VRAM. The good old image2video model can now reuse the last image to produce new videos (as requested by many of you)
-- I have added also the capability to transfer the audio of the original control video (Misc. advanced tab) and an option to preserve the fps into the generated video, so from now on you will be to upsample / restore your old families video and keep the audio at their original pace. Be aware that the duration will be limited to 1000 frames as I still need to add streaming support for unlimited video sizes.
-
-Also, of interest too:
-- Extract video info from Videos that have not been generated by WanGP, even better you can also apply post processing (Upsampling / MMAudio) on non WanGP videos
-- Force the generated video fps to your liking, works wery well with Vace when using a Control Video
-- Ability to chain URLs of Finetune models (for instance put the URLs of a model in your main finetune and reference this finetune in other finetune models to save time)
-
-### July 2 2025: WanGP v6.5.1, WanGP takes care of you: lots of quality of life features:
-- View directly inside WanGP the properties (seed, resolutions, length, most settings...) of the past generations
-- In one click use the newly generated video as a Control Video or Source Video to be continued 
-- Manage multiple settings for the same model and switch between them using a dropdown box 
-- WanGP will keep the last generated videos in the Gallery and will remember the last model you used if you restart the app but kept the Web page open
-- Custom resolutions : add a file in the WanGP folder with the list of resolutions you want to see in WanGP (look at the instruction readme in this folder)
-
-Taking care of your life is not enough, you want new stuff to play with ?
-- MMAudio directly inside WanGP : add an audio soundtrack that matches the content of your video. By the way it is a low VRAM MMAudio and 6 GB of VRAM should be sufficient. You will need to go in the *Extensions* tab of the WanGP *Configuration* to enable MMAudio
-- Forgot to upsample your video during the generation ? want to try another MMAudio variation ? Fear not you can also apply upsampling or add an MMAudio track once the video generation is done. Even better you can ask WangGP for multiple variations of MMAudio to pick the one you like best
-- MagCache support: a new step skipping approach, supposed to be better than TeaCache. Makes a difference if you usually generate with a high number of steps
-- SageAttention2++ support : not just the compatibility but also a slightly reduced VRAM usage
-- Video2Video in Wan Text2Video : this is the paradox, a text2video can become a video2video if you start the denoising process later on an existing video
-- FusioniX upsampler: this is an illustration of Video2Video in Text2Video. Use the FusioniX text2video model with an output resolution of 1080p and a denoising strength of 0.25 and you will get one of the best upsamplers (in only 2/3 steps, you will need lots of VRAM though). Increase the denoising strength and you will get one of the best Video Restorer
-- Choice of Wan Samplers / Schedulers
-- More Lora formats support
-
-**If you had upgraded to v6.5 please upgrade again to 6.5.1 as this will fix a bug that ignored Loras beyond the first one**
 
 See full changelog: **[Changelog](docs/CHANGELOG.md)**
 
@@ -183,7 +180,9 @@ See full changelog: **[Changelog](docs/CHANGELOG.md)**
 
 ## 🚀 Quick Start
 
-**One-click installation:** Get started instantly with [Pinokio App](https://pinokio.computer/)
+**One-click installation:** 
+- Get started instantly with [Pinokio App](https://pinokio.computer/)
+- Use Redtash1 [One Click Install with Sage](https://github.com/Redtash1/Wan2GP-Windows-One-Click-Install-With-Sage)
 
 **Manual installation:**
 ```bash
@@ -191,14 +190,13 @@ git clone https://github.com/deepbeepmeep/Wan2GP.git
 cd Wan2GP
 conda create -n wan2gp python=3.10.9
 conda activate wan2gp
-pip install torch==2.7.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/test/cu124
+pip install torch==2.7.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/test/cu128
 pip install -r requirements.txt
 ```
 
 **Run the application:**
 ```bash
-python wgp.py  # Text-to-video (default)
-python wgp.py --i2v  # Image-to-video
+python wgp.py
 ```
 
 **Update the application:**
@@ -206,14 +204,53 @@ If using Pinokio use Pinokio to update otherwise:
 Get in the directory where WanGP is installed and:
 ```bash
 git pull
+conda activate wan2gp
 pip install -r requirements.txt
 ```
 
+if you get some error messages related to git, you may try the following (beware this will overwrite local changes made to the source code of WanGP):
+```bash
+git fetch origin && git reset --hard origin/main
+conda activate wan2gp
+pip install -r requirements.txt
+```
+
+## 🐳 Docker:
+
+**For Debian-based systems (Ubuntu, Debian, etc.):**
+
+```bash
+./run-docker-cuda-deb.sh
+```
+
+This automated script will:
+
+- Detect your GPU model and VRAM automatically
+- Select optimal CUDA architecture for your GPU
+- Install NVIDIA Docker runtime if needed
+- Build a Docker image with all dependencies
+- Run WanGP with optimal settings for your hardware
+
+**Docker environment includes:**
+
+- NVIDIA CUDA 12.4.1 with cuDNN support
+- PyTorch 2.6.0 with CUDA 12.4 support
+- SageAttention compiled for your specific GPU architecture
+- Optimized environment variables for performance (TF32, threading, etc.)
+- Automatic cache directory mounting for faster subsequent runs
+- Current directory mounted in container - all downloaded models, loras, generated videos and files are saved locally
+
+**Supported GPUs:** RTX 40XX, RTX 30XX, RTX 20XX, GTX 16XX, GTX 10XX, Tesla V100, A100, H100, and more.
 
 ## 📦 Installation
 
+### Nvidia
 For detailed installation instructions for different GPU generations:
 - **[Installation Guide](docs/INSTALLATION.md)** - Complete setup instructions for RTX 10XX to RTX 50XX
+
+### AMD
+For detailed installation instructions for different GPU generations:
+- **[Installation Guide](docs/AMD-INSTALLATION.md)** - Complete setup instructions for Radeon RX 76XX, 77XX, 78XX & 79XX
 
 ## 🎯 Usage
 
@@ -252,4 +289,4 @@ https://www.youtube.com/watch?v=T5jNiEhf9xk
 
 <p align="center">
 Made with ❤️ by DeepBeepMeep
-</p> 
+</p>

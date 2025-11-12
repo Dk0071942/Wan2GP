@@ -1,6 +1,4 @@
-# Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import argparse
-import binascii
 import os
 import os.path as osp
 import torchvision.transforms.functional as TF
@@ -10,7 +8,6 @@ import tempfile
 import imageio
 import torch
 import decord
-import torchvision
 from PIL import Image
 import numpy as np
 from rembg import remove, new_session
@@ -20,13 +17,13 @@ import os
 import tempfile
 import subprocess
 import json
-
-__all__ = ['cache_video', 'cache_image', 'str2bool']
-
+import time
+from functools import lru_cache
+os.environ["U2NET_HOME"] = os.path.join(os.getcwd(), "ckpts", "rembg")
 
 
 from PIL import Image
-
+video_info_cache = []
 def seed_everything(seed: int):
     random.seed(seed)
     np.random.seed(seed)
@@ -35,6 +32,18 @@ def seed_everything(seed: int):
         torch.cuda.manual_seed(seed)
     if torch.backends.mps.is_available():
         torch.mps.manual_seed(seed)
+
+def has_video_file_extension(filename):
+    extension = os.path.splitext(filename)[-1].lower()
+    return extension in [".mp4", ".mkv"]
+
+def has_image_file_extension(filename):
+    extension = os.path.splitext(filename)[-1].lower()
+    return extension in [".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff", ".jfif", ".pjpeg"]
+
+def has_audio_file_extension(filename):
+    extension = os.path.splitext(filename)[-1].lower()
+    return extension in [".wav", ".mp3", ".aac"]
 
 def resample(video_fps, video_frames_count, max_target_frames_count, target_fps, start_target_frame ):
     import math
@@ -72,7 +81,13 @@ def get_file_creation_date(file_path):
         stat = os.stat(file_path)
     return datetime.fromtimestamp(stat.st_birthtime if hasattr(stat, 'st_birthtime') else stat.st_mtime)
 
-def truncate_for_filesystem(s, max_bytes=255):
+def sanitize_file_name(file_name, rep =""):
+    return file_name.replace("/",rep).replace("\\",rep).replace("*",rep).replace(":",rep).replace("|",rep).replace("?",rep).replace("<",rep).replace(">",rep).replace("\"",rep).replace("\n",rep).replace("\r",rep) 
+
+def truncate_for_filesystem(s, max_bytes=None):
+    if max_bytes is None:
+        max_bytes = 50 if os.name == 'nt'else 100
+
     if len(s.encode('utf-8')) <= max_bytes: return s
     l, r = 0, len(s)
     while l < r:
@@ -81,7 +96,51 @@ def truncate_for_filesystem(s, max_bytes=255):
         else: r = m - 1
     return s[:l]
 
+def get_default_workers():
+    return os.cpu_count()/ 2
+
+def process_images_multithread(image_processor, items, process_type, wrap_in_list = True, max_workers: int = os.cpu_count()/ 2, in_place = False) :
+    if not items:
+       return []    
+
+    import concurrent.futures
+    start_time = time.time()
+    # print(f"Preprocessus:{process_type} started")
+    if process_type in ["prephase", "upsample"]: 
+        if wrap_in_list :
+            items_list = [ [img] for img in items]
+        else:
+            items_list = items
+        if max_workers == 1:
+            results = []
+            for idx, item in enumerate(items):
+                item = image_processor(item)
+                results.append(item)
+                if wrap_in_list: items_list[idx] = None
+                if in_place: items[idx] = item[0] if wrap_in_list else item
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(image_processor, img): idx for idx, img in enumerate(items_list)}
+                results = [None] * len(items_list)
+                for future in concurrent.futures.as_completed(futures):
+                    idx = futures[future]
+                    results[idx] = future.result()
+                    if wrap_in_list: items_list[idx] = None
+                    if in_place: 
+                        items[idx] = results[idx][0] if wrap_in_list else results[idx] 
+
+        if wrap_in_list: 
+            results = [ img[0] for img in results]
+    else:
+        results=  image_processor(items) 
+
+    end_time = time.time()
+    # print(f"duration:{end_time-start_time:.1f}")
+
+    return results
+@lru_cache(maxsize=100)
 def get_video_info(video_path):
+    global video_info_cache
     import cv2
     cap = cv2.VideoCapture(video_path)
     
@@ -96,13 +155,47 @@ def get_video_info(video_path):
     
     return fps, width, height, frame_count
 
-def get_video_frame(file_name, frame_no):
-    decord.bridge.set_bridge('torch')
-    reader = decord.VideoReader(file_name)
+def get_video_frame(file_name: str, frame_no: int, return_last_if_missing: bool = False, target_fps = None,  return_PIL = True) -> torch.Tensor:
+    """Extract nth frame from video as PyTorch tensor normalized to [-1, 1]."""
+    cap = cv2.VideoCapture(file_name)
+    
+    if not cap.isOpened():
+        raise ValueError(f"Cannot open video: {file_name}")
+    
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = round(cap.get(cv2.CAP_PROP_FPS))
+    if target_fps is not None:
+        frame_no = round(target_fps * frame_no /fps)
 
-    frame = reader.get_batch([frame_no]).squeeze(0)
-    img = Image.fromarray(frame.numpy().astype(np.uint8))
-    return img
+    # Handle out of bounds
+    if frame_no >= total_frames or frame_no < 0:
+        if return_last_if_missing:
+            frame_no = total_frames - 1
+        else:
+            cap.release()
+            raise IndexError(f"Frame {frame_no} out of bounds (0-{total_frames-1})")
+    
+    # Get frame
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+    ret, frame = cap.read()
+    cap.release()
+    
+    if not ret:
+        raise ValueError(f"Failed to read frame {frame_no}")
+    
+    # Convert BGR->RGB, reshape to (C,H,W), normalize to [-1,1]
+    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    if return_PIL:
+          return Image.fromarray(frame)
+    else:
+        return (torch.from_numpy(frame).permute(2, 0, 1).float() / 127.5) - 1.0
+# def get_video_frame(file_name, frame_no):
+#     decord.bridge.set_bridge('torch')
+#     reader = decord.VideoReader(file_name)
+
+#     frame = reader.get_batch([frame_no]).squeeze(0)
+#     img = Image.fromarray(frame.numpy().astype(np.uint8))
+#     return img
 
 def convert_image_to_video(image):
     if image is None:
@@ -127,10 +220,10 @@ def convert_image_to_video(image):
         out.release()
         return temp_video.name
     
-def resize_lanczos(img, h, w):
+def resize_lanczos(img, h, w, method = None):
     img = (img + 1).float().mul_(127.5)
     img = Image.fromarray(np.clip(img.movedim(0, -1).cpu().numpy(), 0, 255).astype(np.uint8))
-    img = img.resize((w,h), resample=Image.Resampling.LANCZOS) 
+    img = img.resize((w,h), resample=Image.Resampling.LANCZOS if method is None else method) 
     img = torch.from_numpy(np.array(img).astype(np.float32)).movedim(-1, 0)
     img = img.div(127.5).sub_(1)
     return img
@@ -142,9 +235,19 @@ def remove_background(img, session=None):
     img = remove(img, session=session, alpha_matting = True, bgcolor=[255, 255, 255, 0]).convert('RGB')
     return torch.from_numpy(np.array(img).astype(np.float32) / 255.0).movedim(-1, 0)
 
-def convert_tensor_to_image(t, frame_no = -1):    
-    t = t[:, frame_no] if frame_no >= 0 else t
-    return Image.fromarray(t.clone().add_(1.).mul_(127.5).permute(1,2,0).to(torch.uint8).cpu().numpy())
+
+def convert_image_to_tensor(image):
+    return torch.from_numpy(np.array(image).astype(np.float32)).div_(127.5).sub_(1.).movedim(-1, 0)
+
+def convert_tensor_to_image(t, frame_no = 0, mask_levels = False):
+    if len(t.shape) == 4:
+        t = t[:, frame_no] 
+    if t.shape[0]== 1:
+        t = t.expand(3,-1,-1)
+    if mask_levels:
+        return Image.fromarray(t.clone().mul_(255).permute(1,2,0).to(torch.uint8).cpu().numpy())
+    else:
+        return Image.fromarray(t.clone().add_(1.).mul_(127.5).permute(1,2,0).to(torch.uint8).cpu().numpy())
 
 def save_image(tensor_image, name, frame_no = -1):
     convert_tensor_to_image(tensor_image, frame_no).save(name)
@@ -154,6 +257,13 @@ def get_outpainting_full_area_dimensions(frame_height,frame_width, outpainting_d
     frame_height = int(frame_height * (100 + outpainting_top + outpainting_bottom) / 100)
     frame_width =  int(frame_width * (100 + outpainting_left + outpainting_right) / 100)
     return frame_height, frame_width  
+
+def rgb_bw_to_rgba_mask(img, thresh=127):
+    arr = np.array(img.convert('L'))
+    alpha = (arr > thresh).astype(np.uint8) * 255
+    rgba = np.dstack([np.full_like(alpha, 255)] * 3 + [alpha])
+    return Image.fromarray(rgba, 'RGBA')
+
 
 def  get_outpainting_frame_location(final_height, final_width,  outpainting_dims, block_size = 8):
     outpainting_top, outpainting_bottom, outpainting_left, outpainting_right= outpainting_dims
@@ -174,29 +284,64 @@ def  get_outpainting_frame_location(final_height, final_width,  outpainting_dims
     if (margin_left + width) > final_width or outpainting_right == 0: margin_left = final_width - width
     return height, width, margin_top, margin_left
 
-def calculate_new_dimensions(canvas_height, canvas_width, height, width, fit_into_canvas, block_size = 16):
-    if fit_into_canvas == None:
-        return height, width
-    if fit_into_canvas:
-        scale1  = min(canvas_height / height, canvas_width / width)
-        scale2  = min(canvas_width / height, canvas_height / width)
-        scale = max(scale1, scale2) 
+def rescale_and_crop(img, w, h):
+    ow, oh = img.size
+    target_ratio = w / h
+    orig_ratio = ow / oh
+    
+    if orig_ratio > target_ratio:
+        # Crop width first
+        nw = int(oh * target_ratio)
+        img = img.crop(((ow - nw) // 2, 0, (ow + nw) // 2, oh))
     else:
-        scale = (canvas_height * canvas_width / (height * width))**(1/2)
+        # Crop height first
+        nh = int(ow / target_ratio)
+        img = img.crop((0, (oh - nh) // 2, ow, (oh + nh) // 2))
+    
+    return img.resize((w, h), Image.LANCZOS)
 
-    new_height = round( height * scale / block_size) * block_size
-    new_width = round( width * scale / block_size) * block_size
+def calculate_new_dimensions(canvas_height, canvas_width, image_height, image_width, fit_into_canvas,  block_size = 16):
+    if fit_into_canvas == None or fit_into_canvas == 2:
+        # return image_height, image_width
+        return canvas_height, canvas_width
+    if fit_into_canvas == 1:
+        scale1  = min(canvas_height / image_height, canvas_width / image_width)
+        scale2  = min(canvas_width / image_height, canvas_height / image_width)
+        scale = max(scale1, scale2) 
+    else: #0 or #2 (crop)
+        scale = (canvas_height * canvas_width / (image_height * image_width))**(1/2)
+
+    new_height = round( image_height * scale / block_size) * block_size
+    new_width = round( image_width * scale / block_size) * block_size
     return new_height, new_width
 
-def resize_and_remove_background(img_list, budget_width, budget_height, rm_background, ignore_first, fit_into_canvas = False ):
+def calculate_dimensions_and_resize_image(image, canvas_height, canvas_width, fit_into_canvas, fit_crop, block_size = 16):
+    if fit_crop:
+        image = rescale_and_crop(image, canvas_width, canvas_height)
+        new_width, new_height = image.size  
+    else:
+        image_width, image_height = image.size
+        new_height, new_width = calculate_new_dimensions(canvas_height, canvas_width, image_height, image_width, fit_into_canvas, block_size = block_size )
+        image = image.resize((new_width, new_height), resample=Image.Resampling.LANCZOS) 
+    return image, new_height, new_width
+
+def resize_and_remove_background(img_list, budget_width, budget_height, rm_background, any_background_ref, fit_into_canvas = 0, block_size= 16, outpainting_dims = None, background_ref_outpainted = True, inpaint_color = 127.5, return_tensor = False, ignore_last_refs = 0, background_removal_color =  [255, 255, 255] ):
     if rm_background:
         session = new_session() 
 
     output_list =[]
-    for i, img in enumerate(img_list):
+    output_mask_list =[]
+    for i, img in enumerate(img_list if ignore_last_refs == 0 else img_list[:-ignore_last_refs]):
         width, height =  img.size 
-
-        if fit_into_canvas:
+        resized_mask = None
+        if any_background_ref == 1 and i==0 or any_background_ref == 2:
+            if outpainting_dims is not None and background_ref_outpainted:
+                resized_image, resized_mask = fit_image_into_canvas(img, (budget_height, budget_width), inpaint_color, full_frame = True, outpainting_dims = outpainting_dims, return_mask= True, return_image= True)
+            elif img.size != (budget_width, budget_height):
+                resized_image= img.resize((budget_width, budget_height), resample=Image.Resampling.LANCZOS) 
+            else:
+                resized_image =img
+        elif fit_into_canvas == 1:
             white_canvas = np.ones((budget_height, budget_width, 3), dtype=np.uint8) * 255 
             scale = min(budget_height / height, budget_width / width)
             new_height = int(height * scale)
@@ -208,439 +353,117 @@ def resize_and_remove_background(img_list, budget_width, budget_height, rm_backg
             resized_image = Image.fromarray(white_canvas)  
         else:
             scale = (budget_height * budget_width / (height * width))**(1/2)
-            new_height = int( round(height * scale / 16) * 16)
-            new_width = int( round(width * scale / 16) * 16)
+            new_height = int( round(height * scale / block_size) * block_size)
+            new_width = int( round(width * scale / block_size) * block_size)
             resized_image= img.resize((new_width,new_height), resample=Image.Resampling.LANCZOS) 
-        if rm_background  and not (ignore_first and i == 0) :
+        if rm_background  and not (any_background_ref and i==0 or any_background_ref == 2) :
             # resized_image = remove(resized_image, session=session, alpha_matting_erode_size = 1,alpha_matting_background_threshold = 70, alpha_foreground_background_threshold = 100, alpha_matting = True, bgcolor=[255, 255, 255, 0]).convert('RGB')
-            resized_image = remove(resized_image, session=session, alpha_matting_erode_size = 1, alpha_matting = True, bgcolor=[255, 255, 255, 0]).convert('RGB')
-        output_list.append(resized_image) #alpha_matting_background_threshold = 30, alpha_foreground_background_threshold = 200,
-    return output_list
-
-
-def rand_name(length=8, suffix=''):
-    name = binascii.b2a_hex(os.urandom(length)).decode('utf-8')
-    if suffix:
-        if not suffix.startswith('.'):
-            suffix = '.' + suffix
-        name += suffix
-    return name
-
-
-def cache_video(tensor,
-                save_file=None,
-                fps=30,
-                suffix='.mp4',
-                nrow=8,
-                normalize=True,
-                value_range=(-1, 1),
-                retry=5):
-    # cache file
-    cache_file = osp.join('/tmp', rand_name(
-        suffix=suffix)) if save_file is None else save_file
-
-    # save to cache
-    error = None
-    for _ in range(retry):
-        try:
-            # preprocess
-            tensor = tensor.clamp(min(value_range), max(value_range))
-            tensor = torch.stack([
-                torchvision.utils.make_grid(
-                    u, nrow=nrow, normalize=normalize, value_range=value_range)
-                for u in tensor.unbind(2)
-            ],
-                                 dim=1).permute(1, 2, 3, 0)
-            tensor = (tensor * 255).type(torch.uint8).cpu()
-
-            # write video
-            writer = imageio.get_writer(
-                cache_file, fps=fps, codec='libx264', quality=8)
-            for frame in tensor.numpy():
-                writer.append_data(frame)
-            writer.close()
-            return cache_file
-        except Exception as e:
-            error = e
-            continue
-    else:
-        print(f'cache_video failed, error: {error}', flush=True)
-        return None
-
-
-def cache_image(tensor,
-                save_file,
-                nrow=8,
-                normalize=True,
-                value_range=(-1, 1),
-                retry=5):
-    # cache file
-    suffix = osp.splitext(save_file)[1]
-    if suffix.lower() not in [
-            '.jpg', '.jpeg', '.png', '.tiff', '.gif', '.webp'
-    ]:
-        suffix = '.png'
-
-    # save to cache
-    error = None
-    for _ in range(retry):
-        try:
-            tensor = tensor.clamp(min(value_range), max(value_range))
-            torchvision.utils.save_image(
-                tensor,
-                save_file,
-                nrow=nrow,
-                normalize=normalize,
-                value_range=value_range)
-            return save_file
-        except Exception as e:
-            error = e
-            continue
-
-
-def str2bool(v):
-    """
-    Convert a string to a boolean.
-
-    Supported true values: 'yes', 'true', 't', 'y', '1'
-    Supported false values: 'no', 'false', 'f', 'n', '0'
-
-    Args:
-        v (str): String to convert.
-
-    Returns:
-        bool: Converted boolean value.
-
-    Raises:
-        argparse.ArgumentTypeError: If the value cannot be converted to boolean.
-    """
-    if isinstance(v, bool):
-        return v
-    v_lower = v.lower()
-    if v_lower in ('yes', 'true', 't', 'y', '1'):
-        return True
-    elif v_lower in ('no', 'false', 'f', 'n', '0'):
-        return False
-    else:
-        raise argparse.ArgumentTypeError('Boolean value expected (True/False)')
-
-
-import sys, time
-
-# Global variables to track download progress
-_start_time = None
-_last_time = None
-_last_downloaded = 0
-_speed_history = []
-_update_interval = 0.5  # Update speed every 0.5 seconds
-
-def progress_hook(block_num, block_size, total_size, filename=None):
-    """
-    Simple progress bar hook for urlretrieve
-    
-    Args:
-        block_num: Number of blocks downloaded so far
-        block_size: Size of each block in bytes
-        total_size: Total size of the file in bytes
-        filename: Name of the file being downloaded (optional)
-    """
-    global _start_time, _last_time, _last_downloaded, _speed_history, _update_interval
-    
-    current_time = time.time()
-    downloaded = block_num * block_size
-    
-    # Initialize timing on first call
-    if _start_time is None or block_num == 0:
-        _start_time = current_time
-        _last_time = current_time
-        _last_downloaded = 0
-        _speed_history = []
-    
-    # Calculate download speed only at specified intervals
-    speed = 0
-    if current_time - _last_time >= _update_interval:
-        if _last_time > 0:
-            current_speed = (downloaded - _last_downloaded) / (current_time - _last_time)
-            _speed_history.append(current_speed)
-            # Keep only last 5 speed measurements for smoothing
-            if len(_speed_history) > 5:
-                _speed_history.pop(0)
-            # Average the recent speeds for smoother display
-            speed = sum(_speed_history) / len(_speed_history)
-        
-        _last_time = current_time
-        _last_downloaded = downloaded
-    elif _speed_history:
-        # Use the last calculated average speed
-        speed = sum(_speed_history) / len(_speed_history)
-    # Format file sizes and speed
-    def format_bytes(bytes_val):
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if bytes_val < 1024:
-                return f"{bytes_val:.1f}{unit}"
-            bytes_val /= 1024
-        return f"{bytes_val:.1f}TB"
-    
-    file_display = filename if filename else "Unknown file"
-    
-    if total_size <= 0:
-        # If total size is unknown, show downloaded bytes
-        speed_str = f" @ {format_bytes(speed)}/s" if speed > 0 else ""
-        line = f"\r{file_display}: {format_bytes(downloaded)}{speed_str}"
-        # Clear any trailing characters by padding with spaces
-        sys.stdout.write(line.ljust(80))
-        sys.stdout.flush()
-        return
-    
-    downloaded = block_num * block_size
-    percent = min(100, (downloaded / total_size) * 100)
-    
-    # Create progress bar (40 characters wide to leave room for other info)
-    bar_length = 40
-    filled = int(bar_length * percent / 100)
-    bar = '█' * filled + '░' * (bar_length - filled)
-    
-    # Format file sizes and speed
-    def format_bytes(bytes_val):
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if bytes_val < 1024:
-                return f"{bytes_val:.1f}{unit}"
-            bytes_val /= 1024
-        return f"{bytes_val:.1f}TB"
-    
-    speed_str = f" @ {format_bytes(speed)}/s" if speed > 0 else ""
-    
-    # Display progress with filename first
-    line = f"\r{file_display}: [{bar}] {percent:.1f}% ({format_bytes(downloaded)}/{format_bytes(total_size)}){speed_str}"
-    # Clear any trailing characters by padding with spaces
-    sys.stdout.write(line.ljust(100))
-    sys.stdout.flush()
-    
-    # Print newline when complete
-    if percent >= 100:
-        print()
-
-# Wrapper function to include filename in progress hook
-def create_progress_hook(filename):
-    """Creates a progress hook with the filename included"""
-    global _start_time, _last_time, _last_downloaded, _speed_history
-    # Reset timing variables for new download
-    _start_time = None
-    _last_time = None
-    _last_downloaded = 0
-    _speed_history = []
-    
-    def hook(block_num, block_size, total_size):
-        return progress_hook(block_num, block_size, total_size, filename)
-    return hook
-
-
-import tempfile, os
-import ffmpeg
-
-def extract_audio_tracks(source_video, verbose=False, query_only=False):
-    """
-    Extract all audio tracks from a source video into temporary AAC files.
-
-    Returns:
-        Tuple:
-          - List of temp file paths for extracted audio tracks
-          - List of corresponding metadata dicts:
-              {'codec', 'sample_rate', 'channels', 'duration', 'language'}
-              where 'duration' is set to container duration (for consistency).
-    """
-    probe = ffmpeg.probe(source_video)
-    audio_streams = [s for s in probe['streams'] if s['codec_type'] == 'audio']
-    container_duration = float(probe['format'].get('duration', 0.0))
-
-    if not audio_streams:
-        if query_only: return 0
-        if verbose: print(f"No audio track found in {source_video}")
-        return [], []
-
-    if query_only:
-        return len(audio_streams)
-
-    if verbose:
-        print(f"Found {len(audio_streams)} audio track(s), container duration = {container_duration:.3f}s")
-
-    file_paths = []
-    metadata = []
-
-    for i, stream in enumerate(audio_streams):
-        fd, temp_path = tempfile.mkstemp(suffix=f'_track{i}.aac', prefix='audio_')
-        os.close(fd)
-
-        file_paths.append(temp_path)
-        metadata.append({
-            'codec': stream.get('codec_name'),
-            'sample_rate': int(stream.get('sample_rate', 0)),
-            'channels': int(stream.get('channels', 0)),
-            'duration': container_duration,
-            'language': stream.get('tags', {}).get('language', None)
-        })
-
-        ffmpeg.input(source_video).output(
-            temp_path,
-            **{f'map': f'0:a:{i}', 'acodec': 'aac', 'b:a': '128k'}
-        ).overwrite_output().run(quiet=not verbose)
-
-    return file_paths, metadata
-
-
-import subprocess
-
-import subprocess
-
-def combine_and_concatenate_video_with_audio_tracks(
-    save_path_tmp, video_path,
-    source_audio_tracks, new_audio_tracks,
-    source_audio_duration, audio_sampling_rate,
-    new_audio_from_start=False,
-    source_audio_metadata=None,
-    audio_bitrate='128k',
-    audio_codec='aac',
-    verbose = False
-):
-    inputs, filters, maps, idx = ['-i', video_path], [], ['-map', '0:v'], 1
-    metadata_args = []
-    sources = source_audio_tracks or []
-    news = new_audio_tracks or []
-
-    duplicate_source = len(sources) == 1 and len(news) > 1
-    N = len(news) if source_audio_duration == 0 else max(len(sources), len(news)) or 1
-
-    for i in range(N):
-        s = (sources[i] if i < len(sources)
-             else sources[0] if duplicate_source else None)
-        n = news[i] if len(news) == N else (news[0] if news else None)
-
-        if source_audio_duration == 0:
-            if n:
-                inputs += ['-i', n]
-                filters.append(f'[{idx}:a]apad=pad_dur=100[aout{i}]')
-                idx += 1
-            else:
-                filters.append(f'anullsrc=r={audio_sampling_rate}:cl=mono,apad=pad_dur=100[aout{i}]')
+            resized_image = remove(resized_image, session=session, alpha_matting_erode_size = 1, alpha_matting = True, bgcolor=background_removal_color + [0]).convert('RGB')
+        if return_tensor:
+            output_list.append(convert_image_to_tensor(resized_image).unsqueeze(1)) 
         else:
-            if s:
-                inputs += ['-i', s]
-                meta = source_audio_metadata[i] if source_audio_metadata and i < len(source_audio_metadata) else {}
-                needs_filter = (
-                    meta.get('codec') != audio_codec or
-                    meta.get('sample_rate') != audio_sampling_rate or
-                    meta.get('channels') != 1 or
-                    meta.get('duration', 0) < source_audio_duration
-                )
-                if needs_filter:
-                    filters.append(
-                        f'[{idx}:a]aresample={audio_sampling_rate},aformat=channel_layouts=mono,'
-                        f'apad=pad_dur={source_audio_duration},atrim=0:{source_audio_duration},asetpts=PTS-STARTPTS[s{i}]')
-                else:
-                    filters.append(
-                        f'[{idx}:a]apad=pad_dur={source_audio_duration},atrim=0:{source_audio_duration},asetpts=PTS-STARTPTS[s{i}]')
-                if lang := meta.get('language'):
-                    metadata_args += ['-metadata:s:a:' + str(i), f'language={lang}']
-                idx += 1
+            output_list.append(resized_image) 
+        output_mask_list.append(resized_mask)
+    if ignore_last_refs:
+        for img in img_list[-ignore_last_refs:]:
+            output_list.append(convert_image_to_tensor(img).unsqueeze(1) if return_tensor else img) 
+            output_mask_list.append(None)
+
+    return output_list, output_mask_list
+
+def fit_image_into_canvas(ref_img, image_size, canvas_tf_bg =127.5, device ="cpu", full_frame = False, outpainting_dims = None, return_mask = False, return_image = False):
+    from shared.utils.utils import save_image
+    inpaint_color = canvas_tf_bg / 127.5 - 1
+
+    ref_width, ref_height = ref_img.size
+    if (ref_height, ref_width) == image_size and outpainting_dims  == None:
+        ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(1)
+        canvas = torch.zeros_like(ref_img[:1]) if return_mask else None
+    else:
+        if outpainting_dims != None:
+            final_height, final_width = image_size
+            canvas_height, canvas_width, margin_top, margin_left =   get_outpainting_frame_location(final_height, final_width,  outpainting_dims, 1)        
+        else:
+            canvas_height, canvas_width = image_size
+        if full_frame:
+            new_height = canvas_height
+            new_width = canvas_width
+            top = left = 0 
+        else:
+            # if fill_max  and (canvas_height - new_height) < 16:
+            #     new_height = canvas_height
+            # if fill_max  and (canvas_width - new_width) < 16:
+            #     new_width = canvas_width
+            scale = min(canvas_height / ref_height, canvas_width / ref_width)
+            new_height = int(ref_height * scale)
+            new_width = int(ref_width * scale)
+            top = (canvas_height - new_height) // 2
+            left = (canvas_width - new_width) // 2
+        ref_img = ref_img.resize((new_width, new_height), resample=Image.Resampling.LANCZOS) 
+        ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(1)
+        if outpainting_dims != None:
+            canvas = torch.full((3, 1, final_height, final_width), inpaint_color, dtype= torch.float, device=device) # [-1, 1]
+            canvas[:, :, margin_top + top:margin_top + top + new_height, margin_left + left:margin_left + left + new_width] = ref_img 
+        else:
+            canvas = torch.full((3, 1, canvas_height, canvas_width), inpaint_color, dtype= torch.float, device=device) # [-1, 1]
+            canvas[:, :, top:top + new_height, left:left + new_width] = ref_img 
+        ref_img = canvas
+        canvas = None
+        if return_mask:
+            if outpainting_dims != None:
+                canvas = torch.ones((1, 1, final_height, final_width), dtype= torch.float, device=device) # [-1, 1]
+                canvas[:, :, margin_top + top:margin_top + top + new_height, margin_left + left:margin_left + left + new_width] = 0
             else:
-                filters.append(
-                    f'anullsrc=r={audio_sampling_rate}:cl=mono,atrim=0:{source_audio_duration},asetpts=PTS-STARTPTS[s{i}]')
+                canvas = torch.ones((1, 1, canvas_height, canvas_width), dtype= torch.float, device=device) # [-1, 1]
+                canvas[:, :, top:top + new_height, left:left + new_width] = 0
+            canvas = canvas.to(device)
+    if return_image:
+        return convert_tensor_to_image(ref_img), canvas
 
-            if n:
-                inputs += ['-i', n]
-                start = '0' if new_audio_from_start else source_audio_duration
-                filters.append(
-                    f'[{idx}:a]aresample={audio_sampling_rate},aformat=channel_layouts=mono,'
-                    f'atrim=start={start},asetpts=PTS-STARTPTS[n{i}]')
-                filters.append(f'[s{i}][n{i}]concat=n=2:v=0:a=1[aout{i}]')
-                idx += 1
+    return ref_img.to(device), canvas
+
+def prepare_video_guide_and_mask( video_guides, video_masks, pre_video_guide, image_size, current_video_length = 81, latent_size = 4, any_mask = False, any_guide_padding = False, guide_inpaint_color = 127.5, keep_video_guide_frames = [],  inject_frames = [], outpainting_dims = None, device ="cpu"):
+    src_videos, src_masks = [], []
+    inpaint_color_compressed = guide_inpaint_color/127.5 - 1
+    prepend_count = pre_video_guide.shape[1] if pre_video_guide is not None else 0
+    for guide_no, (cur_video_guide, cur_video_mask) in enumerate(zip(video_guides, video_masks)):
+        src_video, src_mask = cur_video_guide, cur_video_mask
+        if pre_video_guide is not None:
+            src_video = pre_video_guide if src_video is None else torch.cat( [pre_video_guide, src_video], dim=1)
+            if any_mask:
+                src_mask = torch.zeros_like(pre_video_guide[:1]) if src_mask is None else torch.cat( [torch.zeros_like(pre_video_guide[:1]), src_mask], dim=1)
+
+        if any_guide_padding:
+            if src_video is None:
+                src_video = torch.full( (3, current_video_length, *image_size ), inpaint_color_compressed, dtype = torch.float, device= device)
+            elif src_video.shape[1] < current_video_length:
+                src_video = torch.cat([src_video, torch.full( (3, current_video_length - src_video.shape[1], *src_video.shape[-2:]  ), inpaint_color_compressed, dtype = src_video.dtype, device= src_video.device) ], dim=1)
+        elif src_video is not None:
+            new_num_frames = (src_video.shape[1] - 1) // latent_size * latent_size + 1 
+            src_video = src_video[:, :new_num_frames]
+
+        if any_mask and src_video is not None:
+            if src_mask is None:                   
+                src_mask = torch.ones_like(src_video[:1])
+            elif src_mask.shape[1] < src_video.shape[1]:
+                src_mask = torch.cat([src_mask, torch.full( (1, src_video.shape[1]- src_mask.shape[1], *src_mask.shape[-2:]  ), 1, dtype = src_video.dtype, device= src_video.device) ], dim=1)
             else:
-                filters.append(f'[s{i}]apad=pad_dur=100[aout{i}]')
+                src_mask = src_mask[:, :src_video.shape[1]]                                        
 
-        maps += ['-map', f'[aout{i}]']
+        if src_video is not None :
+            for k, keep in enumerate(keep_video_guide_frames):
+                if not keep:
+                    pos = prepend_count + k
+                    src_video[:, pos:pos+1] = inpaint_color_compressed
+                    if any_mask: src_mask[:, pos:pos+1] = 1
 
-    cmd = ['ffmpeg', '-y', *inputs,
-           '-filter_complex', ';'.join(filters),  # ✅ Only change made
-           *maps, *metadata_args,
-           '-c:v', 'copy',
-           '-c:a', audio_codec,
-           '-b:a', audio_bitrate,
-           '-ar', str(audio_sampling_rate),
-           '-ac', '1',
-           '-shortest', save_path_tmp]
+            for k, frame in enumerate(inject_frames):
+                if frame != None:
+                    pos = prepend_count + k
+                    src_video[:, pos:pos+1], msk = fit_image_into_canvas(frame, image_size, guide_inpaint_color, device, True, outpainting_dims, return_mask= any_mask)
+                    if any_mask: src_mask[:, pos:pos+1] = msk
+        src_videos.append(src_video)
+        src_masks.append(src_mask)
+    return src_videos, src_masks
 
-    if verbose:
-        print(f"ffmpeg command: {cmd}")
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-    except subprocess.CalledProcessError as e:
-        raise Exception(f"FFmpeg error: {e.stderr}")
-
-
-import ffmpeg
-
-
-import subprocess
-import ffmpeg
-
-def combine_video_with_audio_tracks(target_video, audio_tracks, output_video,
-                                     audio_metadata=None, verbose=False):
-    if not audio_tracks:
-        if verbose: print("No audio tracks to combine."); return False
-
-    dur = float(next(s for s in ffmpeg.probe(target_video)['streams']
-                     if s['codec_type'] == 'video')['duration'])
-    if verbose: print(f"Video duration: {dur:.3f}s")
-
-    cmd = ['ffmpeg', '-y', '-i', target_video]
-    for path in audio_tracks:
-        cmd += ['-i', path]
-
-    cmd += ['-map', '0:v']
-    for i in range(len(audio_tracks)):
-        cmd += ['-map', f'{i+1}:a']
-
-    for i, meta in enumerate(audio_metadata or []):
-        if (lang := meta.get('language')):
-            cmd += ['-metadata:s:a:' + str(i), f'language={lang}']
-
-    cmd += ['-c:v', 'copy', '-c:a', 'copy', '-t', str(dur), output_video]
-
-    result = subprocess.run(cmd, capture_output=not verbose, text=True)
-    if result.returncode != 0:
-        raise Exception(f"FFmpeg error:\n{result.stderr}")
-    if verbose:
-        print(f"Created {output_video} with {len(audio_tracks)} audio track(s)")
-    return True
-
-
-def cleanup_temp_audio_files(audio_tracks, verbose=False):
-    """
-    Clean up temporary audio files.
-    
-    Args:
-        audio_tracks: List of audio file paths to delete
-        verbose: Enable verbose output (default: False)
-        
-    Returns:
-        Number of files successfully deleted
-    """
-    deleted_count = 0
-    
-    for audio_path in audio_tracks:
-        try:
-            if os.path.exists(audio_path):
-                os.unlink(audio_path)
-                deleted_count += 1
-                if verbose:
-                    print(f"Cleaned up {audio_path}")
-        except PermissionError:
-            print(f"Warning: Could not delete {audio_path} (file may be in use)")
-        except Exception as e:
-            print(f"Warning: Error deleting {audio_path}: {e}")
-    
-    if verbose and deleted_count > 0:
-        print(f"Successfully deleted {deleted_count} temporary audio file(s)")
-    
-    return deleted_count
 

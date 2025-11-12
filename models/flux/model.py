@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import torch
 from torch import Tensor, nn
+import torch.nn.functional as F
 
 from .modules.layers import (
     DoubleStreamBlock,
@@ -10,8 +11,12 @@ from .modules.layers import (
     MLPEmbedder,
     SingleStreamBlock,
     timestep_embedding,
+    DistilledGuidance,
+    ChromaModulationOut,
+    SigLIPMultiFeatProjModel,
 )
 from .modules.lora import LinearLora, replace_linear_with_lora
+from .radiance import apply_radiance_head, inject_radiance_modules
 
 
 @dataclass
@@ -29,19 +34,56 @@ class FluxParams:
     theta: int
     qkv_bias: bool
     guidance_embed: bool
-
+    chroma: bool = False
+    eso: bool = False
+    radiance: bool = False
+    radiance_patch_size: int = 16
+    radiance_hidden_size: int = 64
+    radiance_mlp_ratio: int = 4
+    radiance_depth: int = 4
+    radiance_max_freqs: int = 8
+    radiance_tile_size: int = 0
+    radiance_final_head_type: str = "conv"
 
 class Flux(nn.Module):
     """
     Transformer model for flow matching on sequences.
     """
-
+    def get_modulations(self, tensor: torch.Tensor, block_type: str, *, idx: int = 0):
+        # This function slices up the modulations tensor which has the following layout:
+        #   single     : num_single_blocks * 3 elements
+        #   double_img : num_double_blocks * 6 elements
+        #   double_txt : num_double_blocks * 6 elements
+        #   final      : 2 elements
+        if block_type == "final":
+            return (tensor[:, -2:-1, :], tensor[:, -1:, :])
+        single_block_count = self.params.depth_single_blocks
+        double_block_count = self.params.depth
+        offset = 3 * idx
+        if block_type == "single":
+            return ChromaModulationOut.from_offset(tensor, offset)
+        # Double block modulations are 6 elements so we double 3 * idx.
+        offset *= 2
+        if block_type in {"double_img", "double_txt"}:
+            # Advance past the single block modulations.
+            offset += 3 * single_block_count
+            if block_type == "double_txt":
+                # Advance past the double block img modulations.
+                offset += 6 * double_block_count
+            return (
+                ChromaModulationOut.from_offset(tensor, offset),
+                ChromaModulationOut.from_offset(tensor, offset + 3),
+            )
+        raise ValueError("Bad block_type")
+    
     def __init__(self, params: FluxParams):
         super().__init__()
 
         self.params = params
         self.in_channels = params.in_channels
         self.out_channels = params.out_channels
+        self.chroma = params.chroma
+        self.radiance = getattr(params, "radiance", False)
         if params.hidden_size % params.num_heads != 0:
             raise ValueError(
                 f"Hidden size {params.hidden_size} must be divisible by num_heads {params.num_heads}"
@@ -52,13 +94,26 @@ class Flux(nn.Module):
         self.hidden_size = params.hidden_size
         self.num_heads = params.num_heads
         self.pe_embedder = EmbedND(dim=pe_dim, theta=params.theta, axes_dim=params.axes_dim)
-        self.img_in = nn.Linear(self.in_channels, self.hidden_size, bias=True)
-        self.time_in = MLPEmbedder(in_dim=256, hidden_dim=self.hidden_size)
-        self.vector_in = MLPEmbedder(params.vec_in_dim, self.hidden_size)
+        self.img_in = (
+            nn.Identity()
+            if self.radiance
+            else nn.Linear(self.in_channels, self.hidden_size, bias=True)
+        )
+
         self.guidance_in = (
             MLPEmbedder(in_dim=256, hidden_dim=self.hidden_size) if params.guidance_embed else nn.Identity()
         )
         self.txt_in = nn.Linear(params.context_in_dim, self.hidden_size)
+        if self.chroma:
+            self.distilled_guidance_layer = DistilledGuidance(
+                        in_dim=64,
+                        hidden_dim=5120,
+                        out_dim=3072, 
+                        n_layers=5,
+                )
+        else:
+            self.time_in = MLPEmbedder(in_dim=256, hidden_dim=self.hidden_size)
+            self.vector_in = MLPEmbedder(params.vec_in_dim, self.hidden_size)
 
         self.double_blocks = nn.ModuleList(
             [
@@ -67,6 +122,7 @@ class Flux(nn.Module):
                     self.num_heads,
                     mlp_ratio=params.mlp_ratio,
                     qkv_bias=params.qkv_bias,
+                    chroma_modulation = self.chroma,
                 )
                 for _ in range(params.depth)
             ]
@@ -74,12 +130,37 @@ class Flux(nn.Module):
 
         self.single_blocks = nn.ModuleList(
             [
-                SingleStreamBlock(self.hidden_size, self.num_heads, mlp_ratio=params.mlp_ratio)
+                SingleStreamBlock(self.hidden_size, self.num_heads, mlp_ratio=params.mlp_ratio, chroma_modulation = self.chroma)
                 for _ in range(params.depth_single_blocks)
             ]
         )
 
-        self.final_layer = LastLayer(self.hidden_size, 1, self.out_channels)
+        if self.radiance:
+            inject_radiance_modules(self, params)
+            self.final_layer = None
+        else:
+            self.final_layer = LastLayer(
+                self.hidden_size,
+                1,
+                self.out_channels,
+                chroma_modulation=self.chroma,
+                use_linear=True,
+            )
+
+    def _apply_final_layer(self, tokens: Tensor, vec):
+        final_layer = self.final_layer
+        normed = final_layer.norm_final(tokens)
+        if self.chroma:
+            shift, scale = vec
+            shift = shift.squeeze(1)
+            scale = scale.squeeze(1)
+        else:
+            shift, scale = final_layer.adaLN_modulation(vec).chunk(2, dim=1)
+        modulated = torch.addcmul(shift[:, None, :], 1 + scale[:, None, :], normed)
+        if final_layer.linear is None:
+            raise RuntimeError("Final layer projection is not available.")
+        base_tokens = final_layer.linear(modulated)
+        return modulated, base_tokens
 
     def preprocess_loras(self, model_type, sd):
         new_sd = {}
@@ -149,51 +230,142 @@ class Flux(nn.Module):
                             v = swap_scale_shift(v)
                         k = k.replace("norm_out.linear", "final_layer.adaLN_modulation.1")            
                 new_sd[k] = v
+        # elif not first_key.startswith("diffusion_model.") and not first_key.startswith("transformer."):
+        #     for k,v in sd.items():
+        #         if "double" in k:
+        #             k = k.replace(".processor.proj_lora1.", ".img_attn.proj.lora_")
+        #             k = k.replace(".processor.proj_lora2.", ".txt_attn.proj.lora_")
+        #             k = k.replace(".processor.qkv_lora1.", ".img_attn.qkv.lora_")
+        #             k = k.replace(".processor.qkv_lora2.", ".txt_attn.qkv.lora_")
+        #         else:
+        #             k = k.replace(".processor.qkv_lora.", ".linear1_qkv.lora_")
+        #             k = k.replace(".processor.proj_lora.", ".linear2.lora_")
+
+        #         k = "diffusion_model." + k
+        #         new_sd[k] = v
+        #     from mmgp import safetensors2
+        #     safetensors2.torch_write_file(new_sd, "fff.safetensors")
+        else:
+            new_sd = sd
         return new_sd    
 
     def forward(
         self,
         img: Tensor,
         img_ids: Tensor,
-        txt: Tensor,
-        txt_ids: Tensor,
+        txt_list,
+        txt_ids_list,
         timesteps: Tensor,
-        y: Tensor,
+        y_list,
+        img_len = 0,
         guidance: Tensor | None = None,
         callback= None,
         pipeline =None,
-
+        siglip_embedding = None,
+        siglip_embedding_ids = None,
+        radiance_cache: dict | None = None,
     ) -> Tensor:
-        if img.ndim != 3 or txt.ndim != 3:
-            raise ValueError("Input img and txt tensors must have 3 dimensions.")
 
-        # running on sequences img
-        img = self.img_in(img)
-        vec = self.time_in(timestep_embedding(timesteps, 256))
-        if self.params.guidance_embed:
-            if guidance is None:
-                raise ValueError("Didn't get guidance strength for guidance distilled model.")
-            vec +=  self.guidance_in(timestep_embedding(guidance, 256))
-        vec +=  self.vector_in(y)
-        txt = self.txt_in(txt)
+        sz = len(txt_list)
+        height = width = None
+        base_image_list = None
+        if self.radiance:
+            patch_size = self.patch_size
+            # Determine spatial dimensions from image ids.
+            base_ids = img_ids[:, :img_len, :]
+            height = int(base_ids[..., 1].max().item() + 1) * patch_size
+            width = int(base_ids[..., 2].max().item() + 1) * patch_size
+            # Convert tokens back to image space.
+            tokens = img[:, :img_len, :].transpose(1, 2)
+            image = F.fold(
+                tokens,
+                output_size=(height, width),
+                kernel_size=patch_size,
+                stride=patch_size,
+            )
+            # Project image patches into hidden space.
+            hidden = self.img_in_patch(image).flatten(2).transpose(1, 2)
+            img = hidden
+            base_image_list = [image] if sz == 1 else [image, image.clone()]
+        else:
+            img = self.img_in(img)
+        img_list = [img] if sz == 1 else [img, img.clone()]
+        
+        if self.chroma:
+            mod_index_length = 344
+            distill_timestep = timestep_embedding(timesteps, 16).to(img.device, img.dtype)
+            guidance =  torch.tensor([0.]* distill_timestep.shape[0])
+            distil_guidance = timestep_embedding(guidance, 16).to(img.device, img.dtype)
+            modulation_index = timestep_embedding(torch.arange(mod_index_length, device=img.device), 32).to(img.device, img.dtype)
+            modulation_index = modulation_index.unsqueeze(0).repeat(img.shape[0], 1, 1).to(img.device, img.dtype)
+            timestep_guidance = torch.cat([distill_timestep, distil_guidance], dim=1).unsqueeze(1).repeat(1, mod_index_length, 1).to(img.dtype).to(img.device, img.dtype)
+            input_vec = torch.cat([timestep_guidance, modulation_index], dim=-1).to(img.device, img.dtype)
+            mod_vectors = self.distilled_guidance_layer(input_vec)
+        else:
+            vec = self.time_in(timestep_embedding(timesteps, 256))
+            if self.params.guidance_embed:
+                if guidance is None:
+                    raise ValueError("Didn't get guidance strength for guidance distilled model.")
+                vec +=  self.guidance_in(timestep_embedding(guidance, 256))
+            vec_list = [ vec + self.vector_in(y) for y in y_list]
 
-        ids = torch.cat((txt_ids, img_ids), dim=1)
-        pe = self.pe_embedder(ids)
+        img = None
+        txt_list = [self.txt_in(txt) for txt in txt_list ]
+        if siglip_embedding is not None:
+            txt_list = [torch.cat((siglip_embedding, txt) , dim=1) for txt in txt_list]
+            txt_ids_list = [torch.cat((siglip_embedding_ids, txt_id) , dim=1) for txt_id in txt_ids_list]
 
-        for block in self.double_blocks:
+        pe_list = [self.pe_embedder(torch.cat((txt_ids, img_ids), dim=1)) for txt_ids in txt_ids_list] 
+
+        for i, block in enumerate(self.double_blocks):
+            if self.chroma: vec_list = [( self.get_modulations(mod_vectors, "double_img", idx=i), self.get_modulations(mod_vectors, "double_txt", idx=i))] * sz
             if callback != None:
                 callback(-1, None, False, True)
             if pipeline._interrupt:
-                return None
-            img, txt = block(img=img, txt=txt, vec=vec, pe=pe)
+                return [None] * sz
+            for img, txt, pe, vec in zip(img_list, txt_list, pe_list, vec_list):
+                img[...], txt[...] = block(img=img, txt=txt, vec=vec, pe=pe)
+                img = txt = pe = vec= None
 
-        img = torch.cat((txt, img), 1)
-        for block in self.single_blocks:
-            img = block(img, vec=vec, pe=pe)
-        img = img[:, txt.shape[1] :, ...]
+        img_list = [torch.cat((txt, img), 1) for txt, img in zip(txt_list, img_list)]
 
-        img = self.final_layer(img, vec)  # (N, T, patch_size ** 2 * out_channels)
-        return img
+        for i, block in enumerate(self.single_blocks):
+            if self.chroma: vec_list= [self.get_modulations(mod_vectors, "single", idx=i)] * sz
+            if callback != None:
+                callback(-1, None, False, True)
+            if pipeline._interrupt:
+                return [None] * sz
+            for img, pe, vec in zip(img_list, pe_list, vec_list):
+                img[...]= block(x=img, vec=vec, pe=pe)
+                img = pe = vec = None
+        img_list = [img[:, txt.shape[1] : txt.shape[1] + img_len, ...] for img, txt in zip(img_list, txt_list)]
+
+        if self.radiance:
+            final_vecs = None
+        elif self.chroma:
+            final_vecs = [self.get_modulations(mod_vectors, "final")] * sz
+        else:
+            final_vecs = vec_list
+        out_list = []
+        for i in range(sz):
+            hidden_seq = img_list[i]
+            if self.radiance:
+                base_image = base_image_list[i]
+                pred_tokens = apply_radiance_head(
+                    module=self,
+                    hidden_seq=hidden_seq,
+                    base_image=base_image,
+                    height=height,
+                    width=width,
+                )
+                base_image_list[i] = base_image = None
+                img_list[i] = hidden_seq = None
+            else:
+                vec = final_vecs[i]
+                modulated, pred_tokens = self._apply_final_layer(hidden_seq, vec)
+                img_list[i] = hidden_seq = vec = modulated = None
+            out_list.append(pred_tokens)
+        return out_list
 
 
 class FluxLoraWrapper(Flux):
