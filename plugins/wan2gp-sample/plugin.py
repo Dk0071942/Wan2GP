@@ -18,9 +18,6 @@ def release_GPU(state):
 class ConfigTabPlugin(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
-        self.name = PlugIn_Name
-        self.version = "1.0.0"
-        self.description = PlugIn_Name
 
     def setup_ui(self):
         self.request_global("get_current_model_settings")
@@ -58,9 +55,6 @@ class ConfigTabPlugin(WAN2GPPlugin):
             release_GPU(state)
             return "42"
         
-        def goto_video_tab(state): 
-            return self.goto_video_tab(state)
-
         with gr.Column():
             state = self.state
             settings = self.get_current_model_settings(state.value)            
@@ -89,7 +83,7 @@ class ConfigTabPlugin(WAN2GPPlugin):
         )
 
         goto_btn.click(
-            fn=goto_video_tab,
+            fn=self.goto_video_tab,
             inputs=[state],
             outputs=[ self.main_tabs ]
         )

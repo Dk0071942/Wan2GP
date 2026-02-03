@@ -17,6 +17,7 @@ from ..constants import TEXT_ENCODER_PATH, TOKENIZER_PATH
 from ..constants import PRECISION_TO_TYPE
 from .llava.modeling_llava import LlavaForConditionalGeneration 
 
+from shared.utils import files_locator as fl
 
 def use_default(value, default):
     return value if value is not None else default
@@ -30,6 +31,7 @@ def load_text_encoder(
 ):
     if text_encoder_path is None:
         text_encoder_path = TEXT_ENCODER_PATH[text_encoder_type]
+        text_encoder_path = fl.locate_folder(text_encoder_path)
 
     if text_encoder_type == "clipL":
         text_encoder = CLIPTextModel.from_pretrained(text_encoder_path)
@@ -63,7 +65,7 @@ def load_tokenizer(
 ):
     if tokenizer_path is None:
         tokenizer_path = TOKENIZER_PATH[tokenizer_type]
-
+        tokenizer_path = fl.locate_folder(tokenizer_path)
     processor = None
     if tokenizer_type == "clipL":
         tokenizer = CLIPTokenizer.from_pretrained(tokenizer_path, max_length=77)
@@ -187,26 +189,17 @@ class TextEncoder(nn.Module):
         else:
             raise ValueError(f"Unsupported text encoder type: {text_encoder_type}")
 
+        from mmgp import offload
         if "llm" in text_encoder_type:
-            from mmgp import offload
-            # forcedConfigPath=  None if "i2v" in text_encoder_type  else "ckpts/llava-llama-3-8b/config.json"
-            # self.model= offload.fast_load_transformers_model(self.model_path, modelPrefix="language_model" if forcedConfigPath != None else None,  forcedConfigPath=forcedConfigPath)
-
             if "i2v" in text_encoder_type:
                 self.model= offload.fast_load_transformers_model(self.model_path, modelClass= LlavaForConditionalGeneration)
             else:
-                self.model= offload.fast_load_transformers_model(self.model_path, modelPrefix="language_model", forcedConfigPath = "ckpts/llava-llama-3-8b/config.json")
+                self.model= offload.fast_load_transformers_model(self.model_path, modelPrefix="language_model", forcedConfigPath = fl.locate_file("llava-llama-3-8b/config.json"))
                 self.model.final_layer_norm = self.model.model.norm
-
-
         
         else:
-            self.model, self.model_path = load_text_encoder(
-                text_encoder_type=self.text_encoder_type,
-                text_encoder_precision=self.precision,
-                text_encoder_path=self.model_path,
-                device=device,
-            )
+            self.model= offload.fast_load_transformers_model(fl.locate_file("clip_vit_large_patch14/model.safetensors"), ignore_unused_weights= True, modelClass=CLIPTextModel, forcedConfigPath = fl.locate_file("clip_vit_large_patch14/text_config.json"))
+            self.model.final_layer_norm = self.model.text_model.final_layer_norm
 
         self.dtype = self.model.dtype
         self.device = self.model.device

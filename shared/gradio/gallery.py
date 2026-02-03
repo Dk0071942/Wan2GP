@@ -10,8 +10,8 @@ from PIL import Image as PILImage
 FilePath = str
 ImageLike = Union["PIL.Image.Image", Any]
 
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff", ".jfif", ".pjpeg"}
-VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpeg", ".mpg", ".ogv"}
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff", ".jfif", ".pjpeg", ".PNG", ".JPG", ".JPEG", ".BMP", ".GIF", ".WEBP", ".TIF", ".TIFF", ".JFIF", ".PJPEG"}
+VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpeg", ".mpg", ".ogv", ".MP4", ".MOV", ".AVI", ".MKV", ".WEBM", ".M4V", ".MPEG", ".MPG", ".OGV" }
 
 def get_state(state):
     return state if isinstance(state, dict) else state.value
@@ -74,6 +74,8 @@ class AdvancedMediaGallery:
 
     def _normalize_initial(self, items: Sequence[Union[FilePath, ImageLike]], mode: str) -> List[Any]:
         out: List[Any] = []
+        if not isinstance(items, list):
+            items = [items]
         if mode == "image":
             for it in items:
                 p = self._ensure_image_item(it)

@@ -1,19 +1,24 @@
+
+import os
+import re
 import torch
 import numpy as np
 import gradio as gr
-from shared.utils import files_locator as fl 
+import cv2
+from PIL import Image
+from shared.utils.hf import build_hf_url
 
 def test_vace(base_model_type):
     return base_model_type in ["vace_14B", "vace_14B_2_2", "vace_1.3B", "vace_multitalk_14B", "vace_standin_14B", "vace_lynx_14B", "vace_ditto_14B"]     
 
-def test_class_i2v(base_model_type):    
-    return base_model_type in ["i2v", "i2v_2_2", "fun_inp_1.3B", "fun_inp", "flf2v_720p",  "fantasy",  "multitalk", "infinitetalk", "i2v_2_2_multitalk", "animate", "chrono_edit" ]
+def test_class_i2v(base_model_type):
+    return base_model_type in ["i2v", "i2v_2_2", "fun_inp_1.3B", "fun_inp", "flf2v_720p",  "fantasy",  "multitalk", "infinitetalk", "i2v_2_2_multitalk", "animate", "chrono_edit", "steadydancer", "wanmove", "scail", "i2v_2_2_svi2pro" ]
 
 def test_class_t2v(base_model_type):    
-    return base_model_type in ["t2v", "t2v_2_2", "alpha", "lynx"]
+    return base_model_type in ["t2v", "t2v_2_2", "alpha", "alpha2", "lynx"]
 
 def test_oneframe_overlap(base_model_type):
-    return test_class_i2v(base_model_type) and not (test_multitalk(base_model_type) or base_model_type in ["animate"]) or test_wan_5B(base_model_type)
+    return test_class_i2v(base_model_type) and not (test_multitalk(base_model_type) or base_model_type in ["animate", "scail"] or test_svi2pro(base_model_type))  or test_wan_5B(base_model_type)
 
 def test_class_1_3B(base_model_type):    
     return base_model_type in [ "vace_1.3B", "t2v_1.3B", "recam_1.3B","phantom_1.3B","fun_inp_1.3B"]
@@ -28,18 +33,25 @@ def test_lynx(base_model_type):
     return base_model_type in ["lynx_lite", "vace_lynx_lite_14B", "lynx", "vace_lynx_14B", "alpha_lynx"]
 
 def test_alpha(base_model_type):
-    return base_model_type in ["alpha", "alpha_lynx"]
+    return base_model_type in ["alpha", "alpha2", "alpha_lynx"]
 
 def test_wan_5B(base_model_type):
     return base_model_type in ["ti2v_2_2", "lucy_edit"]
+
+def test_i2v_2_2(base_model_type):
+    return base_model_type in ["i2v_2_2", "i2v_2_2_multitalk", "i2v_2_2_svi2pro"]
+
+
+def test_svi2pro(base_model_type):
+    return base_model_type in ["i2v_2_2_svi2pro"]
 
 class family_handler():
     @staticmethod
     def query_supported_types():
         return ["multitalk", "infinitetalk", "fantasy", "vace_14B", "vace_14B_2_2", "vace_multitalk_14B", "vace_standin_14B", "vace_lynx_14B",
-                    "t2v_1.3B", "standin", "lynx_lite", "lynx", "t2v", "t2v_2_2", "vace_1.3B", "vace_ditto_14B", "phantom_1.3B", "phantom_14B", 
-                    "recam_1.3B", "animate", "alpha", "alpha_lynx", "chrono_edit",
-                    "i2v", "i2v_2_2", "i2v_2_2_multitalk", "ti2v_2_2", "lucy_edit", "flf2v_720p", "fun_inp_1.3B", "fun_inp", "mocha"]
+                    "t2v_1.3B", "standin", "lynx_lite", "lynx", "t2v", "t2v_2_2", "vace_1.3B", "vace_ditto_14B", "phantom_1.3B", "phantom_14B",
+                    "recam_1.3B", "animate", "alpha", "alpha2", "alpha_lynx", "chrono_edit",
+                    "i2v", "i2v_2_2", "i2v_2_2_multitalk", "ti2v_2_2", "lucy_edit", "flf2v_720p", "fun_inp_1.3B", "fun_inp", "mocha", "steadydancer", "wanmove", "scail", "i2v_2_2_svi2pro"]
 
 
     @staticmethod
@@ -47,9 +59,11 @@ class family_handler():
 
         models_eqv_map = {
             "flf2v_720p" : "i2v",
+            "i2v_2_2_svi2pro": "i2v_2_2",
             "t2v_1.3B" : "t2v", 
             "t2v_2_2" : "t2v", 
             "alpha" : "t2v", 
+            "alpha2" : "t2v", 
             "lynx" : "t2v", 
             "standin" : "t2v", 
             "vace_standin_14B" : "vace_14B",
@@ -59,9 +73,9 @@ class family_handler():
 
         models_comp_map = { 
                     "vace_14B" : [ "vace_multitalk_14B", "vace_standin_14B", "vace_lynx_lite_14B", "vace_lynx_14B", "vace_14B_2_2"],
-                    "t2v" : [ "vace_14B", "vace_1.3B" "vace_multitalk_14B", "vace_standin_14B", "vace_lynx_lite_14B", "vace_lynx_14B", "vace_14B_2_2", "t2v_1.3B", "phantom_1.3B","phantom_14B", "standin", "lynx_lite", "lynx", "alpha"],
+                    "t2v" : [ "vace_14B", "vace_1.3B" "vace_multitalk_14B", "vace_standin_14B", "vace_lynx_lite_14B", "vace_lynx_14B", "vace_14B_2_2", "t2v_1.3B", "phantom_1.3B","phantom_14B", "standin", "lynx_lite", "lynx", "alpha", "alpha2"],
                     "i2v" : [ "fantasy", "multitalk", "flf2v_720p" ],
-                    "i2v_2_2" : ["i2v_2_2_multitalk"],
+                    "i2v_2_2" : ["i2v_2_2_multitalk", "i2v_2_2_svi2pro"],
                     "fantasy": ["multitalk"],
                     }
         return models_eqv_map, models_comp_map
@@ -73,6 +87,55 @@ class family_handler():
     @staticmethod
     def query_family_infos():
         return {"wan":(0, "Wan2.1"), "wan2_2":(1, "Wan2.2") }
+
+    @staticmethod
+    def register_lora_cli_args(parser, lora_root):
+        parser.add_argument(
+            "--lora-dir-i2v",
+            type=str,
+            default=None,
+            help=f"Path to a directory that contains Wan i2v Loras (default: {os.path.join(lora_root, 'wan_i2v')})"
+        )
+        parser.add_argument(
+            "--lora-dir",
+            type=str,
+            default=None,
+            help=f"Path to a directory that contains Wan t2v Loras (default: {os.path.join(lora_root, 'wan')})"
+        )
+        parser.add_argument(
+            "--lora-dir-wan-1-3b",
+            type=str,
+            default=None,
+            help=f"Path to a directory that contains Wan 1.3B Loras (default: {os.path.join(lora_root, 'wan_1.3B')})"
+        )
+        parser.add_argument(
+            "--lora-dir-wan-5b",
+            type=str,
+            default=None,
+            help=f"Path to a directory that contains Wan 5B Loras (default: {os.path.join(lora_root, 'wan_5B')})"
+        )
+        parser.add_argument(
+            "--lora-dir-wan-i2v",
+            type=str,
+            default=None,
+            help=f"Path to a directory that contains Wan i2v Loras (default: {os.path.join(lora_root, 'wan_i2v')})"
+        )
+
+    @staticmethod
+    def get_lora_dir(base_model_type, args, lora_root):
+        i2v = test_class_i2v(base_model_type) and not test_i2v_2_2(base_model_type)
+        wan_dir = getattr(args, "lora_dir_wan", None) or getattr(args, "lora_dir", None) or os.path.join(lora_root, "wan")
+        wan_i2v_dir = getattr(args, "lora_dir_wan_i2v", None) or getattr(args, "lora_dir_i2v", None) or os.path.join(lora_root, "wan_i2v")
+        wan_1_3b_dir = getattr(args, "lora_dir_wan_1_3b", None) or os.path.join(lora_root, "wan_1.3B")
+        wan_5b_dir = getattr(args, "lora_dir_wan_5b", None) or os.path.join(lora_root, "wan_5B")
+
+        if i2v:
+            return wan_i2v_dir
+        if "1.3B" in base_model_type:
+            return wan_1_3b_dir
+        if base_model_type in ["ti2v_2_2", "ovi"]:
+            return wan_5b_dir
+        return wan_dir
 
     @staticmethod
     def set_cache_parameters(cache_type, base_model_type, model_def, inputs, skip_steps_cache):
@@ -120,17 +183,17 @@ class family_handler():
             skip_steps_cache.coefficients = coefficients
 
     @staticmethod
-    def get_wan_text_encoder_filename(text_encoder_quantization):
-        text_encoder_filename =  "umt5-xxl/models_t5_umt5-xxl-enc-bf16.safetensors"
-        if text_encoder_quantization =="int8":
-            text_encoder_filename = text_encoder_filename.replace("bf16", "quanto_int8") 
-        return  fl.locate_file(text_encoder_filename, True)
-
-    @staticmethod
     def query_model_def(base_model_type, model_def):
         extra_model_def = {}
         if "URLs2" in model_def:
             extra_model_def["no_steps_skipping"] = True
+            extra_model_def["compile"] = ["transformer","transformer2"]
+        text_encoder_folder = "umt5-xxl"
+        extra_model_def["text_encoder_URLs"] = [
+            build_hf_url("DeepBeepMeep/Wan2.1", text_encoder_folder, "models_t5_umt5-xxl-enc-bf16.safetensors"),
+            build_hf_url("DeepBeepMeep/Wan2.1", text_encoder_folder, "models_t5_umt5-xxl-enc-quanto_int8.safetensors"),
+        ]
+        extra_model_def["text_encoder_folder"] = text_encoder_folder
         extra_model_def["i2v_class"] = i2v =  test_class_i2v(base_model_type)
         extra_model_def["t2v_class"] = t2v =  test_class_t2v(base_model_type)
         extra_model_def["multitalk_class"] = multitalk = test_multitalk(base_model_type)
@@ -139,11 +202,21 @@ class family_handler():
         extra_model_def["alpha_class"] = alpha = test_alpha(base_model_type)
         extra_model_def["wan_5B_class"] = wan_5B = test_wan_5B(base_model_type)        
         extra_model_def["vace_class"] = vace_class = test_vace(base_model_type)
+        extra_model_def["color_correction"] = True
+        extra_model_def["svi2pro"] = svi2pro = test_svi2pro(base_model_type)
+        extra_model_def["i2v_2_2"] = i2v_2_2 = test_i2v_2_2(base_model_type)
+
+        
+        if multitalk or base_model_type in ["fantasy"]:
+            if multitalk:
+                extra_model_def["audio_prompt_choices"] = True                
+            extra_model_def["any_audio_prompt"] = True
+
         if base_model_type in ["vace_multitalk_14B", "vace_standin_14B", "vace_lynx_14B"]:
             extra_model_def["parent_model_type"] = "vace_14B"
 
         group = "wan"
-        if base_model_type in ["t2v_2_2", "i2v_2_2", "vace_14B_2_2"]:
+        if base_model_type in ["t2v_2_2", "vace_14B_2_2"] or test_i2v_2_2(base_model_type):
             profiles_dir = "wan_2_2"
             group = "wan2_2"
         elif i2v:
@@ -155,12 +228,12 @@ class family_handler():
             group = "wan2_2"
         elif test_class_1_3B(base_model_type):
             profiles_dir = "wan_1.3B"
-        elif base_model_type in ["alpha"]:
+        elif test_alpha(base_model_type):
             profiles_dir = "wan_alpha"
         else:
             profiles_dir = "wan"
 
-        if  (test_class_t2v(base_model_type) or vace_class or base_model_type in ["chrono_edit"]) and not base_model_type in ["alpha"]:
+        if  (test_class_t2v(base_model_type) or vace_class or base_model_type in ["chrono_edit"]) and not test_alpha(base_model_type):
             extra_model_def["vae_upsampler"] = [1,2]
 
         extra_model_def["profiles_dir"] = [profiles_dir]
@@ -204,6 +277,44 @@ class family_handler():
                             ("lcm + ltx", "lcm"), ]
         })
 
+        extra_model_def["self_refiner"] = base_model_type in ["t2v_2_2", "i2v_2_2", "i2v", "t2v", "flf2v_720p"]
+
+        if i2v:
+            extra_model_def["motion_amplitude"] = True
+ 
+            if base_model_type in ["i2v_2_2"]: 
+                extra_model_def["i2v_v2v"] = True
+                extra_model_def["extract_guide_from_window_start"] = True
+                extra_model_def["guide_custom_choices"] = {
+                    "choices":[("Use Text & Image Prompt Only", ""),
+                            ("Video to Video guided by Text Prompt & Image", "GUV"),
+                            ("Video to Video guided by Text/Image Prompt and Restricted to the Area of the Video Mask", "GVA")],
+                    "default": "",
+                    "show_label" : False,
+                    "letters_filter": "GUVA",
+                    "label": "Video to Video"
+                }
+
+                extra_model_def["mask_preprocessing"] = {
+                    "selection":[ "", "A"],
+                    "visible": False
+                }
+            if svi2pro:
+                extra_model_def["image_ref_choices"] = {
+                        "choices": [("No Anchor Image", ""),
+                        ("Anchor Images For Each Window", "KI"),
+                        ],
+                        "letters_filter":  "KI",
+                        "show_label" : False,
+                }
+                extra_model_def["all_image_refs_are_background_ref"] = True
+                extra_model_def["no_background_removal"] = True
+                extra_model_def["parent_model_type"] = "i2v_2_2"
+
+
+        if base_model_type in ["i2v", "flf2v_720p"] or test_i2v_2_2(base_model_type):
+            extra_model_def["black_frame"] = True
+            
 
         if t2v: 
             if not alpha: 
@@ -223,6 +334,66 @@ class family_handler():
                 }
             extra_model_def["v2i_switch_supported"] = True
 
+
+        if base_model_type in ["wanmove"]:
+            extra_model_def["custom_guide"] = { "label": "Trajectory File", "required": True, "file_types": [".npy"]}
+            extra_model_def["i2v_trajectory"] = True
+
+        if base_model_type in ["steadydancer"]:
+            extra_model_def["guide_custom_choices"] = {
+            "choices":[
+                ("Use Control Video Poses to Animate Person in Start Image", "V"),
+                ("Use Control Video Poses filterd with Mask Video to Animate Person in Start Image", "VA"),
+            ],
+            "default": "PVB",
+            "letters_filter": "PVBA",
+            "label": "Type of Process",
+            "scale": 3,
+            "show_label" : False,
+            }
+            extra_model_def["custom_preprocessor"] = "Extracting Pose Information"
+            extra_model_def["alt_guidance"] = "Condition Guidance"
+            extra_model_def["no_guide2_refresh"] = True
+            extra_model_def["no_mask_refresh"] = True
+            extra_model_def["control_video_trim"] = True
+
+        if base_model_type in ["scail"]:
+            extra_model_def["guide_custom_choices"] = {
+                "choices": [
+                    ("Animate One Person", "V#1#"),
+                    ("Animate Two Persons", "V#2#"),
+                    ("Animate Three Persons", "V#3#"),
+                    ("Animate Four Persons", "V#4#"),
+                    ("Animate Five Persons", "V#5#"),
+                ],
+                "default": "V#1#",
+                "letters_filter": "V#12345",
+                "label": "Type of Process",
+                "scale": 3,
+                "show_label": True,
+            }
+
+            extra_model_def["preprocess_all"] = True
+            extra_model_def["custom_preprocessor"] = "Extracting 3D Pose (NLFPose)"
+            extra_model_def["forced_guide_mask_inputs"] = True
+            extra_model_def["keep_frames_video_guide_not_supported"] = True
+            extra_model_def["mask_preprocessing"] = {
+                "selection": ["", "A", "NA"],
+                "visible": True,
+                "label": "Persons Locations"
+            }
+            extra_model_def["control_video_trim"] = True
+            extra_model_def["extract_guide_from_window_start"] = True
+
+            extra_model_def["return_image_refs_tensor"] = True
+            # extra_model_def["image_ref_choices"] = {
+            #     "choices": [
+            #         ("No Reference Image", ""),
+            #         ("Reference Image of People", "I"),
+            #         ],
+            #     "visible": True,
+            #     "letters_filter":"I",
+            # }
 
         if base_model_type in ["infinitetalk"]: 
             extra_model_def["no_background_removal"] = True
@@ -308,6 +479,8 @@ class family_handler():
 
 
         if vace_class:
+            extra_model_def["control_net_weight_name"] = "Vace"
+            extra_model_def["control_net_weight_size"] = 2
             extra_model_def["guide_preprocessing"] = {
                     "selection": ["", "UV", "PV", "DV", "SV", "LV", "CV", "MV", "V", "PDV", "PSV", "PLV" , "DSV", "DLV", "SLV"],
                     "labels" : { "V": "Use Vace raw format"}
@@ -352,7 +525,18 @@ class family_handler():
                             "default": 0,
                             "label" : "Ditto Process"
                 }
-            
+
+        if base_model_type in ["chrono_edit"]:
+            extra_model_def["model_modes"] = {
+                        "choices": [
+                            ("Fast Image Transformation", 0),
+                            ("Long Image Transformation", 1),
+                            ("Temporal Reasoning Video", 2),],
+                        "default": 0,
+                        "label" : "Chrono Edit Process"
+            }
+            extra_model_def["custom_video_length"] = True
+
 
         if (not vace_class) and standin: 
             extra_model_def["v2i_switch_supported"] = True
@@ -444,7 +628,7 @@ class family_handler():
             image_prompt_types_allowed = "TSVL"
         elif base_model_type in ["lucy_edit"]:
             image_prompt_types_allowed = "TVL"
-        elif multitalk or base_model_type in ["fantasy"]:
+        elif multitalk or base_model_type in ["fantasy", "steadydancer", "scail"] or svi2pro:
             image_prompt_types_allowed = "SVL"
         elif i2v:
             image_prompt_types_allowed = "SEVL"
@@ -466,9 +650,12 @@ class family_handler():
             extra_model_def["background_removal_color"] = [128, 128, 128]  
         if base_model_type in ["fantasy"] or multitalk:
             extra_model_def["audio_guidance"] = True
+        extra_model_def["NAG"] = vace_class or t2v or i2v
 
         if test_oneframe_overlap(base_model_type):
             extra_model_def["sliding_window_defaults"] = { "overlap_min" : 1, "overlap_max" : 1, "overlap_step": 0, "overlap_default": 1}
+        elif svi2pro:
+            extra_model_def["sliding_window_defaults"] = { "overlap_min" : 4, "overlap_max" : 4, "overlap_step": 0, "overlap_default": 4}
 
         # if base_model_type in ["phantom_1.3B", "phantom_14B"]: 
         #     extra_model_def["one_image_ref_needed"] = True
@@ -479,7 +666,7 @@ class family_handler():
 
     @staticmethod
     def get_vae_block_size(base_model_type):
-        return 32 if test_wan_5B(base_model_type) else 16
+        return 32 if test_wan_5B(base_model_type) or base_model_type in ["scail"] else 16
 
     @staticmethod
     def get_rgb_factors(base_model_type ):
@@ -489,14 +676,28 @@ class family_handler():
         return latent_rgb_factors, latent_rgb_factors_bias
     
     @staticmethod
-    def query_model_files(computeList, base_model_type, model_filename, text_encoder_quantization):
-        text_encoder_filename = family_handler.get_wan_text_encoder_filename(text_encoder_quantization)
-
+    def query_model_files(computeList, base_model_type, model_def=None):
+        if test_wan_5B(base_model_type):
+            wan_files = []
+        else:
+            wan_files = ["Wan2.1_VAE.safetensors", "Wan2.1_VAE_upscale2x_imageonly_real_v1.safetensors"]
+            if base_model_type in ["fantasy"]:
+                wan_files.append("fantasy_proj_model.safetensors")
         download_def  = [{
             "repoId" : "DeepBeepMeep/Wan2.1", 
             "sourceFolderList" :  ["xlm-roberta-large", "umt5-xxl", ""  ],
-            "fileList" : [ [ "models_clip_open-clip-xlm-roberta-large-vit-huge-14-bf16.safetensors", "sentencepiece.bpe.model", "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json"], ["special_tokens_map.json", "spiece.model", "tokenizer.json", "tokenizer_config.json"] + computeList(text_encoder_filename) , ["Wan2.1_VAE.safetensors",  "fantasy_proj_model.safetensors", "Wan2.1_VAE_upscale2x_imageonly_real_v1.safetensors"] +  computeList(model_filename)  ]   
+            "fileList" : [ [ "models_clip_open-clip-xlm-roberta-large-vit-huge-14-bf16.safetensors", "sentencepiece.bpe.model", "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json"], ["special_tokens_map.json", "spiece.model", "tokenizer.json", "tokenizer_config.json"], wan_files ]   
         }]
+
+        if base_model_type == "scail":
+            # SCAIL pose extraction (NLFPose torchscript). Kept separate so it isn't downloaded for every model.
+            download_def += [
+                {
+                    "repoId": "DeepBeepMeep/Wan2.1",
+                    "sourceFolderList": ["pose"],
+                    "fileList": [["nlf_l_multi_0.3.2.eager.safetensors", "nlf_l_multi_0.3.2.eager.meta.json"]],
+                }
+            ]
 
         if test_wan_5B(base_model_type):
             download_def += [    {
@@ -507,9 +708,47 @@ class family_handler():
 
         return download_def
 
+    @staticmethod
+    def custom_preprocess(base_model_type, video_guide, video_mask, pre_video_guide=None,  max_workers = 1, expand_scale = 0, video_prompt_type = None, **kwargs):
+        from shared.utils.utils import convert_tensor_to_image
+
+        ref_image = convert_tensor_to_image(pre_video_guide[:, 0])
+        frames = video_guide
+        mask_frames = None if video_mask is None else video_mask
+
+        if base_model_type == "scail":
+            extract_max_people = lambda s: int(m.group(1)) if (m := re.search(r'#(\d+)#', s)) else 1
+
+            # ref_image = ref_image.resize( (ref_image.width // 2, ref_image.height // 2), resample=Image.LANCZOS )
+            from .scail import ScailPoseProcessor
+            scail_max_people = extract_max_people(video_prompt_type)
+            scail_multi_person = scail_max_people > 1
+            processor = ScailPoseProcessor(multi_person=scail_multi_person, max_people=scail_max_people)
+            video_guide_processed = processor.extract_and_render(
+                frames,
+                ref_image=ref_image,
+                mask_frames=mask_frames,
+                align_pose=True
+            )
+            if video_guide_processed.numel() == 0:
+                gr.Info("Unable to detect a Person")
+                return None, None, None, None
+            return video_guide_processed, None, video_mask, None
+        else:
+            # Steadydancer 
+            from .steadydancer.pose_align import PoseAligner
+            aligner = PoseAligner()
+            outputs = aligner.align(frames, ref_image, ref_video_mask=None, align_frame=0, max_frames=None, augment=True, include_composite=False, cpu_resize_workers=max_workers, expand_scale=expand_scale)
+
+            video_guide_processed, video_guide_processed2 = outputs["pose_only"], outputs["pose_aug"]
+            if video_guide_processed.numel() == 0:
+                return None, None, None, None
+
+            return video_guide_processed, video_guide_processed2, None, None 
+
 
     @staticmethod
-    def load_model(model_filename, model_type, base_model_type, model_def, quantizeTransformer = False, text_encoder_quantization = None, dtype = torch.bfloat16, VAE_dtype = torch.float32, mixed_precision_transformer = False, save_quantized= False, submodel_no_list = None, override_text_encoder = None, VAE_upsampling = None, **kwargs):
+    def load_model(model_filename, model_type, base_model_type, model_def, quantizeTransformer = False, text_encoder_quantization = None, dtype = torch.bfloat16, VAE_dtype = torch.float32, mixed_precision_transformer = False, save_quantized= False, submodel_no_list = None, text_encoder_filename = None, VAE_upsampling = None, **kwargs):
         from .configs import WAN_CONFIGS
 
         if test_class_i2v(base_model_type):
@@ -526,7 +765,7 @@ class family_handler():
             model_type = model_type,        
             model_def = model_def,
             base_model_type=base_model_type,
-            text_encoder_filename= family_handler.get_wan_text_encoder_filename(text_encoder_quantization) if override_text_encoder is None else override_text_encoder,
+            text_encoder_filename= text_encoder_filename,
             quantizeTransformer = quantizeTransformer,
             dtype = dtype,
             VAE_dtype = VAE_dtype, 
@@ -548,7 +787,7 @@ class family_handler():
     def fix_settings(base_model_type, settings_version, model_def, ui_defaults):
         if ui_defaults.get("sample_solver", "") == "": 
             ui_defaults["sample_solver"] = "unipc"
-
+        
         if settings_version < 2.24:
             if (model_def.get("multiple_submodels", False) or ui_defaults.get("switch_threshold", 0) > 0) and ui_defaults.get("guidance_phases",0)<2:
                 ui_defaults["guidance_phases"] = 2
@@ -617,6 +856,18 @@ class family_handler():
                 remove_background_images_ref = ui_defaults.get("remove_background_images_ref", None)
                 if remove_background_images_ref !=0:
                     ui_defaults["remove_background_images_ref"] = 0
+
+        if settings_version < 2.42 and test_svi2pro(base_model_type):
+            ui_defaults.update({
+                "sliding_window_size": 81, 
+                "sliding_window_overlap" : 4,
+            })
+
+        if model_def.get("self_refiner",False) and settings_version < 2.47:
+            ui_defaults["self_refiner_setting"] = 0
+            ui_defaults["self_refiner_plan"] = ""
+            # ui_defaults["self_refiner_f_uncertainty"] = 0.2
+            # ui_defaults["self_refiner_certain_percentage"] = 0.999
 
     @staticmethod
     def update_default_settings(base_model_type, model_def, ui_defaults):
@@ -715,13 +966,44 @@ class family_handler():
                 "audio_prompt_type": "R",
 	            "force_fps": "control",
             })
+        elif base_model_type in ["steadydancer"]:
+            ui_defaults.update({
+                "video_prompt_type": "VA",
+                "image_prompt_type": "S",
+                "audio_prompt_type": "R",
+                "force_fps": "control",
+                "alt_guidance_scale" : 2.0,
+            })
+        elif base_model_type in ["scail"]:
+            ui_defaults.update({
+                "video_prompt_type": "V#1#",
+                "image_prompt_type": "S",
+                "audio_prompt_type": "R",
+                "force_fps": "control",
+                "sliding_window_overlap" : 1,
+                "sliding_window_size": 81,
+            })
 
+        if test_svi2pro(base_model_type):
+            ui_defaults.update({
+                "sliding_window_size": 81, 
+                "sliding_window_overlap" : 4,
+            })
+            
+        if test_wan_5B(base_model_type):
+            ui_defaults.update({
+                "sliding_window_size": 121, 
+            })
+
+        if base_model_type in ["i2v_2_2"]:
+            ui_defaults.update({"masking_strength": 0.1, "denoising_strength": 0.9})
+            
         if base_model_type in ["chrono_edit"]:
             ui_defaults.update({"image_mode": 1, "prompt_enhancer":"TI"})
 
         if test_oneframe_overlap(base_model_type):
             ui_defaults["sliding_window_overlap"] = 1
-            ui_defaults["color_correction_strength"]= 0
+            ui_defaults["sliding_window_color_correction_strength"]= 0
 
         if test_multitalk(base_model_type):
             ui_defaults["audio_guidance_scale"] = 4
@@ -741,9 +1023,14 @@ class family_handler():
                 inputs["video_prompt_type"] = video_prompt_type 
 
 
-        if base_model_type in ["vace_standin_14B", "vace_lynx_14B"]:
+        elif base_model_type in ["vace_standin_14B", "vace_lynx_14B"]:
             image_refs = inputs["image_refs"]
             video_prompt_type = inputs["video_prompt_type"]
             if image_refs is not None and len(image_refs) == 1 and "K" in video_prompt_type:
                 gr.Info("Warning, Ref Image that contains the Face to transfer is Missing: if 'Landscape and then People or Objects' is selected beside the Landscape Image Ref there should be another Image Ref that contains a Face.")
                     
+
+        elif base_model_type in ["chrono_edit"]:
+            model_mode = inputs["model_mode"]
+            inputs["video_length"] = 5 if model_mode==0 else 29
+            inputs["image_mode"] = 0 if model_mode==2 else 1
